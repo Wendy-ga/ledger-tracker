@@ -93,6 +93,8 @@
   }
   .profile-tile .pname{font-weight:600; font-size:14px;}
   .profile-tile .pmeta{font-size:11px; color:var(--ink-soft); margin-top:2px; font-family:'IBM Plex Mono',monospace;}
+  .tile-actions{display:flex; gap:4px; margin-top:10px; padding-top:8px; border-top:1px dashed var(--line);}
+  .tile-actions button{padding:3px 6px;}
 
   /* ---------- Dashboard summary ---------- */
   .stat-row{display:flex; gap:14px; flex-wrap:wrap; margin:16px 0 4px;}
@@ -220,6 +222,19 @@ const firebaseConfig = {
   messagingSenderId: "570464157373",
   appId: "1:570464157373:web:c5a34dea4c2e3400f341d4"
 };
+
+/* =====================================================================
+   ACCESS LEVEL — anyone signed in can VIEW the tracker. Only emails
+   listed here can EDIT it (mark assignments, log payments, add students
+   or courses). Everyone else gets a read-only view. Keep this in sync
+   with the "allow write" list in your Firestore security rules —
+   this list only controls the app's UI, not the database itself.
+   ===================================================================== */
+const EDITOR_EMAILS = [
+  "gaparewendy@gmail.com",
+  "andy.gapare@gmail.com"
+];
+
 </script>
 <script>
 /* ===================== DATA ===================== */
@@ -400,6 +415,7 @@ const CATALOG = [
 // firebaseConfig above, create user accounts, and lock down Firestore security rules.
 
 let students = [];      // [{id,name,note,createdAt}] — populated live from Firestore
+let trashedStudents = []; // soft-deleted students, recoverable from the Trash screen
 let currentStudentId = null;
 let studentCourses = {}; // studentId -> [courseInstance] — populated live from Firestore
 let view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
@@ -410,6 +426,11 @@ const money = n => '£' + (Number(n)||0).toFixed(2);
 /* ===================== FIREBASE (AUTH + LIVE DATA) ===================== */
 let fbApp, auth, db;
 let currentUser = null;
+let isReadOnly = true;
+function lockIfReadOnly(btnOrInput){
+  if(isReadOnly){ btnOrInput.disabled = true; btnOrInput.title = 'View only — ask an editor to make this change'; }
+  return btnOrInput;
+}
 let studentsUnsub = null;
 let authReady = false;
 let dataReady = false;
@@ -431,10 +452,11 @@ function attachStudentsListener(){
   dataReady = false;
   studentsUnsub = db.collection('students').orderBy('createdAt','asc').onSnapshot(snap=>{
     students = [];
-    const migrated = [];
+    trashedStudents = [];
     snap.forEach(doc=>{
       const d = doc.data();
-      students.push({ id: doc.id, name: d.name, note: d.note || '', createdAt: d.createdAt });
+      const rec = { id: doc.id, name: d.name, note: d.note || '', createdAt: d.createdAt, deletedAt: d.deletedAt || null };
+      if(d.deleted){ trashedStudents.push(rec); } else { students.push(rec); }
       const courses = d.courses || [];
       courses.forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
         if(a.status==='done') a.status='done_paid'; // migrate legacy status
@@ -525,6 +547,7 @@ function render(){
   if(view.screen==='profiles') app.appendChild(renderProfiles());
   else if(view.screen==='dashboard') app.appendChild(renderDashboard());
   else if(view.screen==='course') app.appendChild(renderCourse());
+  else if(view.screen==='trash') app.appendChild(renderTrash());
   app.appendChild(el(`<div class="footer-note">THE LEDGER — a quiet place to track modules, assignments &amp; what's been paid</div>`));
 }
 
@@ -588,6 +611,9 @@ function renderBrand(){
         sw.appendChild(homeBtn);
       }
     }
+    if(isReadOnly){
+      sw.appendChild(el(`<span class="pill locked" title="You can view everything but can't make changes">View only</span>`));
+    }
     const signOutBtn = el(`<button class="subtle" style="font-size:12px;" title="${escapeHtml(currentUser.email||'')}">Sign out</button>`);
     signOutBtn.onclick = ()=> auth.signOut();
     sw.appendChild(signOutBtn);
@@ -613,20 +639,130 @@ function renderProfiles(){
         <div class="avatar">${initials}</div>
         <div class="pname">${escapeHtml(s.name)}</div>
         <div class="pmeta">${(studentCourses[s.id]||[]).length} course(s)</div>
+        <div class="tile-actions"></div>
       </div>`);
-      tile.onclick = ()=>{
+      tile.addEventListener('click', ()=>{
         currentStudentId = s.id;
         view = { screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{} };
         render();
-      };
+      });
+      const actionsRow = tile.querySelector('.tile-actions');
+      const editBtn = lockIfReadOnly(el(`<button class="subtle" style="font-size:11px;">Edit</button>`));
+      editBtn.addEventListener('click', e=>{ e.stopPropagation(); openEditStudentModal(s); });
+      const delBtn = lockIfReadOnly(el(`<button class="subtle" style="font-size:11px;">Delete</button>`));
+      delBtn.addEventListener('click', e=>{ e.stopPropagation(); softDeleteStudent(s); });
+      actionsRow.appendChild(editBtn);
+      actionsRow.appendChild(delBtn);
       grid.appendChild(tile);
     });
     listCard.appendChild(grid);
   }
-  const addBtn = el(`<button class="moss" style="margin-top:16px;">+ Add student</button>`);
+  const addBtn = lockIfReadOnly(el(`<button class="moss" style="margin-top:16px;">+ Add student</button>`));
   addBtn.onclick = ()=> openAddStudentModal();
   listCard.appendChild(addBtn);
+  if(trashedStudents.length>0){
+    const trashBtn = el(`<button class="ghost" style="margin-top:16px; margin-left:10px;">🗑 Trash (${trashedStudents.length})</button>`);
+    trashBtn.onclick = ()=>{ view = { screen:'trash', courseIdx:null, addingCourse:false, openModules:{} }; render(); };
+    listCard.appendChild(trashBtn);
+  }
   wrap.appendChild(listCard);
+  return wrap;
+}
+
+async function softDeleteStudent(s){
+  if(!confirm('Move "'+s.name+'" to the trash? Their courses, assignments and payment records stay intact and can be restored later.')) return;
+  try{
+    await db.collection('students').doc(s.id).update({ deleted:true, deletedAt: Date.now() });
+    if(currentStudentId===s.id){ currentStudentId=null; view={screen:'profiles',courseIdx:null,addingCourse:false,openModules:{}}; }
+    toast(s.name+' moved to trash');
+  }catch(e){
+    console.error('soft delete failed', e);
+    toast('⚠ Could not delete — check your connection');
+  }
+}
+
+function openEditStudentModal(s){
+  const bg = el(`<div class="modal-bg"></div>`);
+  const modal = el(`<div class="modal">
+    <h3>Edit student details</h3>
+    <div class="field"><label>Full name</label><input id="editName" value="${escapeHtml(s.name)}" /></div>
+    <div class="field"><label>Note (optional)</label><input id="editNote" value="${escapeHtml(s.note||'')}" /></div>
+    <div class="row">
+      <button class="ghost" id="cancelEdit">Cancel</button>
+      <button class="moss" id="confirmEdit">Save changes</button>
+    </div>
+  </div>`);
+  bg.appendChild(modal);
+  document.body.appendChild(bg);
+  modal.querySelector('#cancelEdit').onclick = ()=> bg.remove();
+  bg.onclick = e=>{ if(e.target===bg) bg.remove(); };
+  modal.querySelector('#confirmEdit').onclick = async ()=>{
+    const name = modal.querySelector('#editName').value.trim();
+    if(!name){ toast('Name can\'t be empty'); return; }
+    const note = modal.querySelector('#editNote').value.trim();
+    try{
+      await db.collection('students').doc(s.id).update({ name, note });
+      bg.remove();
+      toast('Details updated for '+name);
+    }catch(e){
+      console.error('edit student failed', e);
+      toast('⚠ Could not save — check your connection');
+    }
+  };
+}
+
+function renderTrash(){
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Back to students</button>`);
+  back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  wrap.appendChild(el(`<div class="card">
+    <h2>Trash</h2>
+    <div class="muted">Deleted students land here. Their course and payment records are kept — restore any time, or delete permanently once you're sure.</div>
+  </div>`));
+
+  if(trashedStudents.length===0){
+    wrap.appendChild(el(`<div class="card"><div class="empty"><div class="big">Trash is empty</div>Nothing deleted right now.</div></div>`));
+    return wrap;
+  }
+
+  trashedStudents.forEach(s=>{
+    const card = el(`<div class="card">
+      <div class="course-head">
+        <div class="titles">
+          <h2>${escapeHtml(s.name)}</h2>
+          <div class="muted">${s.note ? escapeHtml(s.note)+' · ' : ''}${(studentCourses[s.id]||[]).length} course(s) · deleted ${s.deletedAt ? new Date(s.deletedAt).toLocaleDateString() : ''}</div>
+        </div>
+      </div>
+    </div>`);
+    const btnRow = el(`<div class="row" style="margin-top:14px;"></div>`);
+    const restoreBtn = lockIfReadOnly(el(`<button class="moss">Restore</button>`));
+    restoreBtn.onclick = async ()=>{
+      try{
+        await db.collection('students').doc(s.id).update({ deleted:false, deletedAt:null });
+        toast(s.name+' restored');
+      }catch(e){
+        console.error('restore failed', e);
+        toast('⚠ Could not restore — check your connection');
+      }
+    };
+    const permDelBtn = lockIfReadOnly(el(`<button class="subtle" style="color:var(--rust);">Delete permanently</button>`));
+    permDelBtn.onclick = async ()=>{
+      if(!confirm('Permanently delete "'+s.name+'" and all their records? This cannot be undone.')) return;
+      try{
+        await db.collection('students').doc(s.id).delete();
+        toast(s.name+' permanently deleted');
+      }catch(e){
+        console.error('permanent delete failed', e);
+        toast('⚠ Could not delete — check your connection');
+      }
+    };
+    card.appendChild(btnRow);
+    btnRow.appendChild(restoreBtn);
+    btnRow.appendChild(permDelBtn);
+    wrap.appendChild(card);
+  });
   return wrap;
 }
 
@@ -663,6 +799,10 @@ function openAddStudentModal(){
 
 function renderDashboard(){
   const student = students.find(s=>s.id===currentStudentId);
+  if(!student){
+    view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
+    return renderProfiles();
+  }
   const courses = studentCourses[currentStudentId] || [];
   const wrap = el(`<div></div>`);
 
@@ -671,20 +811,33 @@ function renderDashboard(){
   const totalAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.length,0),0);
   const doneAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.filter(isAssignmentDone).length,0),0);
 
-  wrap.appendChild(el(`<div class="card">
-    <h2>${escapeHtml(student.name)}</h2>
-    <div class="muted">${student.note ? escapeHtml(student.note) : 'Student overview'}</div>
+  const headerCard = el(`<div class="card">
+    <div class="course-head">
+      <div class="titles">
+        <h2>${escapeHtml(student.name)}</h2>
+        <div class="muted">${student.note ? escapeHtml(student.note) : 'Student overview'}</div>
+      </div>
+    </div>
     <div class="stat-row">
       <div class="stat"><div class="num">${courses.length}</div><div class="lbl">Courses</div></div>
       <div class="stat"><div class="num">${doneAssignments}/${totalAssignments}</div><div class="lbl">Assignments done</div></div>
       <div class="stat"><div class="num">${money(totalPaid)}</div><div class="lbl">Total paid</div></div>
       <div class="stat"><div class="num" style="color:var(--rust)">${money(totalOutstanding)}</div><div class="lbl">Outstanding</div></div>
     </div>
-  </div>`));
+  </div>`);
+  const headerActions = el(`<div class="row" style="margin-top:12px;"></div>`);
+  const editBtn = lockIfReadOnly(el(`<button class="ghost" style="font-size:12px;">Edit details</button>`));
+  editBtn.onclick = ()=> openEditStudentModal(student);
+  const delBtn = lockIfReadOnly(el(`<button class="subtle" style="font-size:12px;">Delete student</button>`));
+  delBtn.onclick = ()=> softDeleteStudent(student);
+  headerActions.appendChild(editBtn);
+  headerActions.appendChild(delBtn);
+  headerCard.appendChild(headerActions);
+  wrap.appendChild(headerCard);
 
   const top = el(`<div class="top-actions"></div>`);
   top.appendChild(el(`<div class="muted">Enrolled courses</div>`));
-  const addCourseBtn = el(`<button class="moss">+ Add course</button>`);
+  const addCourseBtn = lockIfReadOnly(el(`<button class="moss">+ Add course</button>`));
   addCourseBtn.onclick = ()=>{ view.addingCourse = true; view.screen='course'; view.courseIdx=null; render(); };
   top.appendChild(addCourseBtn);
   wrap.appendChild(top);
@@ -797,7 +950,7 @@ function renderCourse(){
           { key:'done_self',   label:'Done independently' },
         ];
         options.forEach(opt=>{
-          const btn = el(`<button type="button" class="status-btn ${a.status===opt.key?'active '+opt.key:''}">${opt.label}</button>`);
+          const btn = lockIfReadOnly(el(`<button type="button" class="status-btn ${a.status===opt.key?'active '+opt.key:''}">${opt.label}</button>`));
           btn.addEventListener('click', async ()=>{
             // clicking the already-active state clears it back to "not started"
             a.status = (a.status===opt.key) ? 'not_started' : opt.key;
@@ -812,7 +965,7 @@ function renderCourse(){
 
         if(a.status==='done_unpaid'){
           const dueWrap = el(`<div class="apaid"><span>amount due</span></div>`);
-          const dueInput = el(`<input type="number" min="0" step="0.01" placeholder="0.00" />`);
+          const dueInput = lockIfReadOnly(el(`<input type="number" min="0" step="0.01" placeholder="0.00" />`));
           dueInput.value = a.due ?? '';
           dueInput.addEventListener('change', async ()=>{
             a.due = dueInput.value === '' ? 0 : Number(dueInput.value);
@@ -823,7 +976,7 @@ function renderCourse(){
           row.appendChild(dueWrap);
         } else if(a.status==='done_paid'){
           const payWrap = el(`<div class="apaid"><span>paid</span></div>`);
-          const payInput = el(`<input type="number" min="0" step="0.01" placeholder="0.00" />`);
+          const payInput = lockIfReadOnly(el(`<input type="number" min="0" step="0.01" placeholder="0.00" />`));
           payInput.value = a.paid ?? '';
           payInput.addEventListener('change', async ()=>{
             a.paid = payInput.value === '' ? 0 : Number(payInput.value);
@@ -840,7 +993,7 @@ function renderCourse(){
       modEl.appendChild(list);
 
       const actions = el(`<div class="module-actions"></div>`);
-      const addA = el(`<button class="ghost" style="font-size:12px;padding:6px 12px;">+ Add assignment</button>`);
+      const addA = lockIfReadOnly(el(`<button class="ghost" style="font-size:12px;padding:6px 12px;">+ Add assignment</button>`));
       addA.onclick = async ()=>{
         m.assignments.push({ id: uid(), label:'Assignment '+(m.assignments.length+1), status:'not_started', paid:null });
         saveCourses(currentStudentId);
@@ -848,7 +1001,7 @@ function renderCourse(){
       };
       actions.appendChild(addA);
       if(m.assignments.length>1){
-        const rmA = el(`<button class="subtle" style="font-size:12px;">Remove last assignment</button>`);
+        const rmA = lockIfReadOnly(el(`<button class="subtle" style="font-size:12px;">Remove last assignment</button>`));
         rmA.onclick = async ()=>{
           m.assignments.pop();
           saveCourses(currentStudentId);
@@ -865,11 +1018,11 @@ function renderCourse(){
   const btnRow = el(`<div class="row" style="margin-top:16px;"></div>`);
   const cat = CATALOG.find(c=>c.id===course.catalogId);
   if(cat && cat.groups && cat.groups.length){
-    const addElectiveBtn = el(`<button class="ghost">+ Add elective from catalog</button>`);
+    const addElectiveBtn = lockIfReadOnly(el(`<button class="ghost">+ Add elective from catalog</button>`));
     addElectiveBtn.onclick = ()=> openAddElectiveModal(course, cat);
     btnRow.appendChild(addElectiveBtn);
   }
-  const addModBtn = el(`<button class="ghost">+ Add custom module</button>`);
+  const addModBtn = lockIfReadOnly(el(`<button class="ghost">+ Add custom module</button>`));
   addModBtn.onclick = ()=> openAddModuleModal(course);
   btnRow.appendChild(addModBtn);
   modCard.appendChild(btnRow);
@@ -879,6 +1032,7 @@ function renderCourse(){
   const dangerCard = el(`<div class="card">
     <button class="subtle" id="removeCourseBtn">Remove this course from ${escapeHtml(students.find(s=>s.id===currentStudentId).name)}'s tracker</button>
   </div>`);
+  lockIfReadOnly(dangerCard.querySelector('#removeCourseBtn'));
   dangerCard.querySelector('#removeCourseBtn').onclick = async ()=>{
     if(confirm('Remove "'+course.title+'" and all its assignment/payment records? This cannot be undone.')){
       studentCourses[currentStudentId].splice(view.courseIdx,1);
@@ -1088,6 +1242,7 @@ function init(){
   auth.onAuthStateChanged(user=>{
     currentUser = user;
     authReady = true;
+    isReadOnly = !user || !EDITOR_EMAILS.includes(user.email);
     if(user){
       view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
       attachStudentsListener();

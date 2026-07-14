@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Ledger — HNC/HND Assignment Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F6F2E9;
+    --paper-2:#EFE9DA;
+    --ink:#20281F;
+    --ink-soft:#4B5346;
+    --line:#D9D0BB;
+    --moss:#5E6E4F;
+    --moss-deep:#3F4C34;
+    --gold:#A9843D;
+    --gold-soft:#EADFC2;
+    --rust:#A85B3F;
+    --white:#FFFDF8;
+    --radius:14px;
+    --shadow: 0 1px 2px rgba(32,40,31,0.06), 0 8px 24px -12px rgba(32,40,31,0.18);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle at 15% 0%, rgba(94,110,79,0.05), transparent 45%),
+      var(--paper);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+    padding:32px 20px 80px;
+  }
+  .wrap{max-width:920px;margin:0 auto;}
+  .brand{
+    display:flex;align-items:baseline;justify-content:space-between;
+    margin-bottom:28px; flex-wrap:wrap; gap:10px;
+  }
+  .brand h1{
+    font-family:'Fraunces',serif; font-weight:600; font-size:28px; margin:0;
+    letter-spacing:-0.01em;
+  }
+  .brand h1 span{color:var(--moss); font-style:italic; font-weight:500;}
+  .brand .tag{font-size:12px; color:var(--ink-soft); letter-spacing:0.08em; text-transform:uppercase; font-family:'IBM Plex Mono',monospace;}
+  .switcher{display:flex; align-items:center; gap:10px;}
+  .switcher select{
+    font-family:'IBM Plex Mono',monospace; font-size:12px; padding:8px 10px;
+    border:1px solid var(--line); border-radius:8px; background:var(--white); color:var(--ink);
+  }
+
+  .card{
+    background:var(--white); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:22px 24px; margin-bottom:18px;
+  }
+  .card h2{font-family:'Fraunces',serif; font-size:19px; font-weight:600; margin:0 0 4px;}
+  .muted{color:var(--ink-soft); font-size:13px;}
+
+  button{
+    font-family:'Inter',sans-serif; font-weight:600; font-size:13px;
+    border-radius:9px; border:1px solid var(--ink); background:var(--ink); color:var(--paper);
+    padding:9px 16px; cursor:pointer; transition:transform .12s ease, opacity .12s ease;
+  }
+  button:hover{opacity:0.88;}
+  button:active{transform:scale(0.97);}
+  button.ghost{background:transparent; color:var(--ink); border:1px solid var(--line);}
+  button.moss{background:var(--moss); border-color:var(--moss);}
+  button.subtle{background:transparent;border:none;color:var(--ink-soft);padding:4px 6px;font-weight:500;}
+  button.subtle:hover{color:var(--rust);}
+  button:disabled{opacity:0.4; cursor:not-allowed;}
+  input, textarea, select{
+    font-family:'Inter',sans-serif; font-size:14px; padding:9px 11px;
+    border:1px solid var(--line); border-radius:8px; background:var(--paper); color:var(--ink);
+    width:100%;
+  }
+  input:focus, textarea:focus, select:focus{outline:2px solid var(--moss); outline-offset:1px;}
+  label{font-size:12px; font-weight:600; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.05em; display:block; margin-bottom:5px;}
+  .field{margin-bottom:14px;}
+  .row{display:flex; gap:12px; flex-wrap:wrap;}
+  .row > *{flex:1; min-width:160px;}
+
+  /* ---------- Profile picker ---------- */
+  .profiles-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-top:14px;}
+  .profile-tile{
+    background:var(--white); border:1px solid var(--line); border-radius:12px; padding:16px;
+    cursor:pointer; text-align:left; transition:border-color .15s, transform .12s;
+  }
+  .profile-tile:hover{border-color:var(--moss); transform:translateY(-2px);}
+  .profile-tile .avatar{
+    width:38px;height:38px;border-radius:50%;background:var(--gold-soft);color:var(--gold);
+    display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-weight:700;margin-bottom:10px;
+  }
+  .profile-tile .pname{font-weight:600; font-size:14px;}
+  .profile-tile .pmeta{font-size:11px; color:var(--ink-soft); margin-top:2px; font-family:'IBM Plex Mono',monospace;}
+
+  /* ---------- Dashboard summary ---------- */
+  .stat-row{display:flex; gap:14px; flex-wrap:wrap; margin:16px 0 4px;}
+  .stat{
+    flex:1; min-width:130px; background:var(--paper-2); border-radius:10px; padding:14px 16px;
+    border:1px solid var(--line);
+  }
+  .stat .num{font-family:'Fraunces',serif; font-size:24px; font-weight:600; color:var(--moss-deep);}
+  .stat .lbl{font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-soft); margin-top:2px;}
+
+  /* ---------- Course card ---------- */
+  .course-card{border-left:4px solid var(--moss);}
+  .course-head{display:flex; justify-content:space-between; align-items:flex-start; gap:12px; cursor:pointer;}
+  .course-head .titles{flex:1;}
+  .progress-outer{height:7px; background:var(--paper-2); border-radius:99px; margin-top:10px; overflow:hidden;}
+  .progress-inner{height:100%; background:linear-gradient(90deg,var(--moss),var(--moss-deep)); border-radius:99px; transition:width .3s ease;}
+  .pill{
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; padding:3px 9px; border-radius:99px;
+    text-transform:uppercase; letter-spacing:0.04em; border:1px solid var(--line); white-space:nowrap;
+  }
+  .pill.done{background:var(--moss); color:var(--white); border-color:var(--moss);}
+  .pill.progress{background:var(--gold-soft); color:var(--gold); border-color:var(--gold);}
+  .pill.locked{background:var(--paper-2); color:var(--ink-soft);}
+
+  /* ---------- Module ledger ---------- */
+  .module{border-top:1px dashed var(--line); padding:16px 0;}
+  .module:first-of-type{border-top:1px solid var(--line); margin-top:16px;}
+  .module-head{display:flex; align-items:center; justify-content:space-between; gap:10px; cursor:pointer;}
+  .module-head .mtitle{display:flex; align-items:center; gap:10px;}
+  .midx{
+    width:26px;height:26px;border-radius:50%; border:1.5px solid var(--moss); color:var(--moss-deep);
+    display:flex;align-items:center;justify-content:center; font-family:'IBM Plex Mono',monospace; font-size:11px; flex:none;
+  }
+  .midx.done{background:var(--moss); color:var(--white); border-color:var(--moss);}
+  .midx.locked{border-color:var(--line); color:var(--ink-soft);}
+  .mname{font-weight:600; font-size:14.5px;}
+  .mcode{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft);}
+
+  .assignments{margin:14px 0 0 36px;}
+  .assignment{
+    display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:9px;
+    background:var(--paper); margin-bottom:8px; border:1px solid var(--line); flex-wrap:wrap;
+  }
+  .assignment.done{background:#F1F5EC; border-color:var(--moss);}
+  .assignment.due{background:#FBF1E7; border-color:var(--rust);}
+  .assignment.self{background:#F3F1EA; border-color:var(--gold);}
+  .assignment .alabel{flex:1; min-width:140px; font-size:13.5px; font-weight:500;}
+  .status-seg{display:flex; gap:6px; flex-wrap:wrap;}
+  .status-btn{
+    font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600; padding:6px 10px;
+    border-radius:99px; border:1px solid var(--line); background:var(--white); color:var(--ink-soft);
+    cursor:pointer;
+  }
+  .status-btn:hover{border-color:var(--ink-soft);}
+  .status-btn.active.done_unpaid{background:var(--rust); color:var(--white); border-color:var(--rust);}
+  .status-btn.active.done_paid{background:var(--moss); color:var(--white); border-color:var(--moss);}
+  .status-btn.active.done_self{background:var(--gold); color:var(--white); border-color:var(--gold);}
+  .assignment .apaid{display:flex; align-items:center; gap:6px; width:100%; justify-content:flex-end;}
+  .assignment .apaid input{width:90px; padding:6px 8px; font-size:13px;}
+  .assignment .apaid span{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--gold);}
+  .self-note{width:100%; text-align:right; font-size:11.5px; font-style:italic; color:var(--gold);}
+  .locked-note{margin-left:36px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
+
+  .module-actions{display:flex; gap:8px; margin-left:36px; margin-top:8px;}
+
+  /* ---------- Add course flow ---------- */
+  .catalog-list{display:grid; gap:10px; margin-top:10px;}
+  .catalog-item{
+    display:flex; justify-content:space-between; align-items:center; padding:14px 16px;
+    border:1px solid var(--line); border-radius:10px; background:var(--paper); cursor:pointer;
+  }
+  .catalog-item:hover{border-color:var(--moss);}
+  .catalog-item .ctitle{font-weight:600; font-size:14px;}
+  .catalog-item .cmeta{font-size:11.5px; color:var(--ink-soft); margin-top:2px;}
+
+  .elective-box{border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; background:var(--paper);}
+  .elective-box .grouptitle{font-size:12.5px; font-weight:700; margin-bottom:8px; color:var(--moss-deep);}
+  .elective-opt{display:flex; align-items:center; gap:9px; padding:6px 0; font-size:13.5px;}
+  .elective-opt input{width:auto;}
+  .count-flag{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--gold);}
+
+  .empty{
+    text-align:center; padding:50px 20px; color:var(--ink-soft);
+  }
+  .empty .big{font-family:'Fraunces',serif; font-size:22px; color:var(--ink); margin-bottom:6px;}
+
+  .top-actions{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;}
+  .back{background:none;border:none;color:var(--ink-soft);font-weight:600;padding:4px 0;cursor:pointer;font-size:13px;}
+  .back:hover{color:var(--ink);}
+
+  .modal-bg{
+    position:fixed; inset:0; background:rgba(32,40,31,0.45); display:flex; align-items:center; justify-content:center;
+    padding:20px; z-index:50;
+  }
+  .modal{background:var(--white); border-radius:16px; padding:26px; max-width:460px; width:100%; box-shadow:var(--shadow); max-height:85vh; overflow-y:auto;}
+  .modal h3{font-family:'Fraunces',serif; margin-top:0;}
+
+  .footer-note{text-align:center; font-size:11.5px; color:var(--ink-soft); margin-top:26px; font-family:'IBM Plex Mono',monospace;}
+  .toast{
+    position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--paper);
+    padding:10px 18px; border-radius:99px; font-size:13px; box-shadow:var(--shadow); z-index:80; opacity:0; transition:opacity .25s;
+  }
+  .toast.show{opacity:1;}
+  ::selection{background:var(--gold-soft);}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+/* =====================================================================
+   FIREBASE SETUP — paste your project's config below.
+   Get this from: Firebase Console → Project settings → General →
+   "Your apps" → the </> (Web app) icon → SDK setup and configuration.
+   ===================================================================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyA3w-L5eQEQYX6mk82L3O1syZrBZhrvkNY",
+  authDomain: "ledger-tracker-4302b.firebaseapp.com",
+  projectId: "ledger-tracker-4302b",
+  storageBucket: "ledger-tracker-4302b.firebasestorage.app",
+  messagingSenderId: "570464157373",
+  appId: "1:570464157373:web:c5a34dea4c2e3400f341d4"
+};
+</script>
+<script>
+/* ===================== DATA ===================== */
+
+// Catalog of courses. "verified" ones (currently just the fetched HNC EEE) reflect the
+// real Pearson unit structure. Others are sensible starter templates — fully editable,
+// since exact unit choices vary by provider and by year.
+const CATALOG = [
+  {
+    id: 'hnc-eee',
+    title: 'HNC in Electrical & Electronic Engineering',
+    level: 'Level 4 · Pearson BTEC',
+    verified: true,
+    core: [
+      { code:'U4002', name:'Engineering Maths' },
+      { code:'U4003', name:'Engineering Science I' },
+      { code:'U4019', name:'Electrical & Electronic Principles' },
+    ],
+    groups: [
+      {
+        title: 'Core Group — choose BOTH units from ONE group',
+        chooseCount: 2,
+        pools: [
+          { label:'Group 1', options:[
+            {code:'U4001', name:'Engineering Design'},
+            {code:'U4004', name:'Managing a Professional Engineering Project'},
+          ]},
+          { label:'Group 2', options:[
+            {code:'U4062', name:'Professional Engineering Practice'},
+            {code:'U4063', name:'Engineering Mechanics and Materials'},
+          ]},
+        ],
+        lockedPair:true
+      },
+      {
+        title: 'Optional Units — choose 3',
+        chooseCount: 3,
+        pools:[{ label:'Electives', options:[
+          {code:'U4015', name:'Automation, Robotics & PLCs'},
+          {code:'U4021', name:'Electrical Machines'},
+          {code:'U4020', name:'Digital Principles'},
+          {code:'U4022', name:'Electronic Circuits & Devices'},
+          {code:'U4026', name:'Electrical Systems & Fault Finding'},
+          {code:'U4033', name:'Programmable Logic Controllers'},
+          {code:'U4061', name:'Programming for Engineers'},
+          {code:'U4006', name:'Mechatronics'},
+          {code:'U4008', name:'Mechanical Principles'},
+          {code:'U4014', name:'Production Engineering for Manufacture'},
+          {code:'U4017', name:'Quality and Process Improvement'},
+          {code:'U4068', name:'Industrial Robots'},
+        ]}]
+      }
+    ]
+  },
+  {
+    id: 'hnd-eee-topup',
+    title: 'Top-up HND in Electrical & Electronic Engineering',
+    level: 'Level 5 · Pearson BTEC (starter template — edit units to match your enrolment)',
+    verified:false,
+    core: [
+      { code:'U5-01', name:'Research Project (Engineering)' },
+    ],
+    groups: [
+      { title:'Specialist units — choose 5', chooseCount:5, pools:[{label:'Electives', options:[
+        {code:'U5-02', name:'Advanced Electrical Machines'},
+        {code:'U5-03', name:'Power Electronics'},
+        {code:'U5-04', name:'Control Systems Engineering'},
+        {code:'U5-05', name:'Embedded Systems'},
+        {code:'U5-06', name:'Renewable Energy Systems'},
+        {code:'U5-07', name:'Communication & Data Systems'},
+        {code:'U5-08', name:'Advanced Mathematics for Engineers'},
+        {code:'U5-09', name:'Instrumentation & Control'},
+      ]}]}
+    ]
+  },
+  {
+    id: 'hnc-mech',
+    title: 'HNC in Mechanical Engineering',
+    level: 'Level 4 · Pearson BTEC (starter template — edit units to match your enrolment)',
+    verified:false,
+    core: [
+      { code:'U4002', name:'Engineering Maths' },
+      { code:'U4003', name:'Engineering Science I' },
+      { code:'U4008', name:'Mechanical Principles' },
+    ],
+    groups: [
+      {
+        title:'Core Group — choose BOTH from ONE group',
+        chooseCount:2,
+        pools:[
+          { label:'Group 1', options:[
+            {code:'U4001', name:'Engineering Design'},
+            {code:'U4004', name:'Managing a Professional Engineering Project'},
+          ]},
+          { label:'Group 2', options:[
+            {code:'U4062', name:'Professional Engineering Practice'},
+            {code:'U4063', name:'Engineering Mechanics and Materials'},
+          ]},
+        ],
+        lockedPair:true
+      },
+      { title:'Optional Units — choose 3', chooseCount:3, pools:[{label:'Electives', options:[
+        {code:'U-TD', name:'Thermodynamics'},
+        {code:'U-FM', name:'Fluid Mechanics'},
+        {code:'U-MM', name:'Materials Engineering'},
+        {code:'U-CAD', name:'Computer Aided Design (CAD)'},
+        {code:'U-MAINT', name:'Maintenance Engineering'},
+        {code:'U4014', name:'Production Engineering for Manufacture'},
+        {code:'U4068', name:'Industrial Robots'},
+        {code:'U4006', name:'Mechatronics'},
+      ]}]}
+    ]
+  },
+  {
+    id: 'gen-eng',
+    title: 'HNC in General Engineering',
+    level: 'Level 4 · Pearson BTEC (starter template — edit units to match your enrolment)',
+    verified:false,
+    core: [
+      { code:'U4002', name:'Engineering Maths' },
+      { code:'U4003', name:'Engineering Science I' },
+    ],
+    groups: [
+      { title:'Optional Units — choose 5', chooseCount:5, pools:[{label:'Electives', options:[
+        {code:'U4001', name:'Engineering Design'},
+        {code:'U4004', name:'Managing a Professional Engineering Project'},
+        {code:'U4008', name:'Mechanical Principles'},
+        {code:'U4019', name:'Electrical & Electronic Principles'},
+        {code:'U4006', name:'Mechatronics'},
+        {code:'U4014', name:'Production Engineering for Manufacture'},
+      ]}]}
+    ]
+  },
+  {
+    id: 'project-mgmt',
+    title: 'Project Management',
+    level: 'Standalone / CPD track (starter template — edit units freely)',
+    verified:false,
+    core: [
+      { code:'PM-01', name:'Managing a Professional Engineering Project' },
+      { code:'PM-02', name:'Principles of Project Planning & Control' },
+    ],
+    groups: [
+      { title:'Optional Units — choose 2', chooseCount:2, pools:[{label:'Electives', options:[
+        {code:'PM-03', name:'Risk Management'},
+        {code:'PM-04', name:'Procurement & Contracts'},
+        {code:'PM-05', name:'Stakeholder & Communications Management'},
+        {code:'PM-06', name:'Agile Project Delivery'},
+      ]}]}
+    ]
+  },
+  {
+    id: 'business-mgmt',
+    title: 'HNC Business (Management)',
+    level: 'Level 4 · Pearson BTEC (starter template — edit units freely)',
+    verified:false,
+    core: [
+      { code:'B-01', name:'Business Environment' },
+      { code:'B-02', name:'Management Concepts and Practice' },
+    ],
+    groups: [
+      { title:'Optional Units — choose 4', chooseCount:4, pools:[{label:'Electives', options:[
+        {code:'B-03', name:'Marketing Essentials'},
+        {code:'B-04', name:'Human Resource Management'},
+        {code:'B-05', name:'Finance for Managers'},
+        {code:'B-06', name:'Operations Management'},
+        {code:'B-07', name:'Leading and Managing Teams'},
+      ]}]}
+    ]
+  },
+];
+
+/* ===================== STATE / STORAGE ===================== */
+// This app is now backed by Firebase: sign-in is required (Firebase Authentication),
+// and all student/course/payment data lives in Cloud Firestore, shared live between
+// every signed-in user — anyone you create an account for can see and edit everything.
+// See the setup instructions provided alongside this file for how to configure
+// firebaseConfig above, create user accounts, and lock down Firestore security rules.
+
+let students = [];      // [{id,name,note,createdAt}] — populated live from Firestore
+let currentStudentId = null;
+let studentCourses = {}; // studentId -> [courseInstance] — populated live from Firestore
+let view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
+
+const uid = () => Math.random().toString(36).slice(2,10);
+const money = n => '£' + (Number(n)||0).toFixed(2);
+
+/* ===================== FIREBASE (AUTH + LIVE DATA) ===================== */
+let fbApp, auth, db;
+let currentUser = null;
+let studentsUnsub = null;
+let authReady = false;
+let dataReady = false;
+let authError = '';
+
+function initFirebase(){
+  try{
+    fbApp = firebase.initializeApp(firebaseConfig);
+    auth = firebase.auth();
+    db = firebase.firestore();
+  }catch(e){
+    console.error('Firebase init failed', e);
+    authError = 'Firebase is not configured correctly — check firebaseConfig at the top of this file.';
+  }
+}
+
+function attachStudentsListener(){
+  if(studentsUnsub) studentsUnsub();
+  dataReady = false;
+  studentsUnsub = db.collection('students').orderBy('createdAt','asc').onSnapshot(snap=>{
+    students = [];
+    const migrated = [];
+    snap.forEach(doc=>{
+      const d = doc.data();
+      students.push({ id: doc.id, name: d.name, note: d.note || '', createdAt: d.createdAt });
+      const courses = d.courses || [];
+      courses.forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
+        if(a.status==='done') a.status='done_paid'; // migrate legacy status
+      })));
+      studentCourses[doc.id] = courses;
+    });
+    dataReady = true;
+    render();
+  }, err=>{
+    console.error('students listener failed', err);
+    toast('⚠ Could not connect to the database — check your Firebase setup and security rules');
+  });
+}
+
+async function saveCourses(studentId){
+  try{
+    await db.collection('students').doc(studentId).update({ courses: studentCourses[studentId] || [] });
+  }catch(e){
+    console.error('saveCourses failed', e);
+    toast('⚠ Could not save — check your connection');
+  }
+}
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+/* ===================== MODULE / ASSIGNMENT HELPERS ===================== */
+
+function makeModule(code, name, assignmentCount){
+  const assignments = [];
+  for(let i=1;i<=assignmentCount;i++){
+    assignments.push({ id: uid(), label: 'Assignment '+i, status:'not_started', paid:null });
+  }
+  return { id: uid(), code, name, assignments };
+}
+
+function isAssignmentDone(a){ return a.status==='done_unpaid' || a.status==='done_paid' || a.status==='done_self'; }
+function moduleDone(m){ return m.assignments.length>0 && m.assignments.every(isAssignmentDone); }
+function courseProgress(course){
+  const total = course.modules.reduce((s,m)=>s+m.assignments.length,0);
+  const done = course.modules.reduce((s,m)=>s+m.assignments.filter(isAssignmentDone).length,0);
+  return total===0 ? 0 : Math.round((done/total)*100);
+}
+function coursePaidTotal(course){
+  let sum=0;
+  course.modules.forEach(m=>m.assignments.forEach(a=>{ if(a.status==='done_paid') sum += Number(a.paid)||0; }));
+  return sum;
+}
+function courseOutstanding(course){
+  let sum=0;
+  course.modules.forEach(m=>m.assignments.forEach(a=>{ if(a.status==='done_unpaid') sum += Number(a.due)||0; }));
+  return sum;
+}
+function courseComplete(course){ return course.modules.length>0 && course.modules.every(moduleDone); }
+
+/* ===================== RENDER ===================== */
+
+function el(html){ const d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstElementChild; }
+
+function render(){
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+
+  if(authError){
+    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">Setup needed</div>${escapeHtml(authError)}</div></div>`));
+    return;
+  }
+  if(!authReady){
+    app.appendChild(el(`<div class="card"><div class="empty">Connecting…</div></div>`));
+    return;
+  }
+  if(!currentUser){
+    app.appendChild(renderBrand());
+    app.appendChild(renderLogin());
+    return;
+  }
+  if(!dataReady){
+    app.appendChild(renderBrand());
+    app.appendChild(el(`<div class="card"><div class="empty">Loading student records…</div></div>`));
+    return;
+  }
+
+  app.appendChild(renderBrand());
+  if(view.screen==='profiles') app.appendChild(renderProfiles());
+  else if(view.screen==='dashboard') app.appendChild(renderDashboard());
+  else if(view.screen==='course') app.appendChild(renderCourse());
+  app.appendChild(el(`<div class="footer-note">THE LEDGER — a quiet place to track modules, assignments &amp; what's been paid</div>`));
+}
+
+function renderLogin(){
+  const wrap = el(`<div class="card" style="max-width:380px; margin:40px auto;">
+    <h2>Sign in</h2>
+    <div class="muted" style="margin-bottom:16px;">This tracker is private. Sign in with the account your administrator set up for you.</div>
+    <div class="field"><label>Email</label><input id="loginEmail" type="email" placeholder="you@example.com" /></div>
+    <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="••••••••" /></div>
+    <div id="loginError" class="muted" style="color:var(--rust); margin-bottom:10px; display:none;"></div>
+    <button class="moss" id="loginBtn" style="width:100%;">Sign in</button>
+  </div>`);
+  const doLogin = async ()=>{
+    const email = wrap.querySelector('#loginEmail').value.trim();
+    const password = wrap.querySelector('#loginPassword').value;
+    const errEl = wrap.querySelector('#loginError');
+    errEl.style.display='none';
+    if(!email || !password){ errEl.textContent='Enter both email and password.'; errEl.style.display='block'; return; }
+    try{
+      await auth.signInWithEmailAndPassword(email, password);
+    }catch(e){
+      errEl.textContent = e.message || 'Could not sign in.';
+      errEl.style.display='block';
+    }
+  };
+  wrap.querySelector('#loginBtn').addEventListener('click', doLogin);
+  wrap.querySelectorAll('input').forEach(inp=>{
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+  });
+  return wrap;
+}
+
+function renderBrand(){
+  const wrap = el(`<div class="brand">
+    <div>
+      <h1>The <span>Ledger</span></h1>
+      <div class="tag">HNC · HND Assignment &amp; Payment Tracker</div>
+    </div>
+    <div class="switcher" id="switcher"></div>
+  </div>`);
+  const sw = wrap.querySelector('#switcher');
+  if(currentUser){
+    if(students.length){
+      const select = el(`<select id="studentSelect"></select>`);
+      select.appendChild(el(`<option value="">— switch student —</option>`));
+      students.forEach(s=>{
+        const opt = el(`<option value="${s.id}">${escapeHtml(s.name)}</option>`);
+        if(s.id===currentStudentId) opt.selected = true;
+        select.appendChild(opt);
+      });
+      select.addEventListener('change', e=>{
+        if(!e.target.value) return;
+        currentStudentId = e.target.value;
+        view = { screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{} };
+        render();
+      });
+      sw.appendChild(select);
+      if(view.screen!=='profiles'){
+        const homeBtn = el(`<button class="ghost">All students</button>`);
+        homeBtn.onclick = ()=>{ view={screen:'profiles',courseIdx:null,addingCourse:false,openModules:{}}; render(); };
+        sw.appendChild(homeBtn);
+      }
+    }
+    const signOutBtn = el(`<button class="subtle" style="font-size:12px;" title="${escapeHtml(currentUser.email||'')}">Sign out</button>`);
+    signOutBtn.onclick = ()=> auth.signOut();
+    sw.appendChild(signOutBtn);
+  }
+  return wrap;
+}
+
+function renderProfiles(){
+  const wrap = el(`<div></div>`);
+  wrap.appendChild(el(`<div class="card">
+    <h2>Students</h2>
+    <div class="muted">Create an account for each student, then track their courses, modules and assignment payments.</div>
+  </div>`));
+
+  const listCard = el(`<div class="card"></div>`);
+  if(students.length===0){
+    listCard.appendChild(el(`<div class="empty"><div class="big">No students yet</div>Add your first student to get started.</div>`));
+  } else {
+    const grid = el(`<div class="profiles-grid"></div>`);
+    students.forEach(s=>{
+      const initials = s.name.trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
+      const tile = el(`<div class="profile-tile">
+        <div class="avatar">${initials}</div>
+        <div class="pname">${escapeHtml(s.name)}</div>
+        <div class="pmeta">${(studentCourses[s.id]||[]).length} course(s)</div>
+      </div>`);
+      tile.onclick = ()=>{
+        currentStudentId = s.id;
+        view = { screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{} };
+        render();
+      };
+      grid.appendChild(tile);
+    });
+    listCard.appendChild(grid);
+  }
+  const addBtn = el(`<button class="moss" style="margin-top:16px;">+ Add student</button>`);
+  addBtn.onclick = ()=> openAddStudentModal();
+  listCard.appendChild(addBtn);
+  wrap.appendChild(listCard);
+  return wrap;
+}
+
+function openAddStudentModal(){
+  const bg = el(`<div class="modal-bg"></div>`);
+  const modal = el(`<div class="modal">
+    <h3>New student account</h3>
+    <div class="field"><label>Full name</label><input id="newName" placeholder="e.g. Amara Okafor" /></div>
+    <div class="field"><label>Note (optional)</label><input id="newNote" placeholder="cohort, ID number, etc." /></div>
+    <div class="row">
+      <button class="ghost" id="cancelAdd">Cancel</button>
+      <button class="moss" id="confirmAdd">Create account</button>
+    </div>
+  </div>`);
+  bg.appendChild(modal);
+  document.body.appendChild(bg);
+  modal.querySelector('#cancelAdd').onclick = ()=> bg.remove();
+  bg.onclick = e=>{ if(e.target===bg) bg.remove(); };
+  modal.querySelector('#confirmAdd').onclick = async ()=>{
+    const name = modal.querySelector('#newName').value.trim();
+    if(!name){ toast('Please enter a name'); return; }
+    const note = modal.querySelector('#newNote').value.trim();
+    const id = uid();
+    try{
+      await db.collection('students').doc(id).set({ name, note, createdAt: Date.now(), courses: [] });
+      bg.remove();
+      toast('Account created for '+name);
+    }catch(e){
+      console.error('create student failed', e);
+      toast('⚠ Could not create account — check your connection');
+    }
+  };
+}
+
+function renderDashboard(){
+  const student = students.find(s=>s.id===currentStudentId);
+  const courses = studentCourses[currentStudentId] || [];
+  const wrap = el(`<div></div>`);
+
+  const totalPaid = courses.reduce((s,c)=>s+coursePaidTotal(c),0);
+  const totalOutstanding = courses.reduce((s,c)=>s+courseOutstanding(c),0);
+  const totalAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.length,0),0);
+  const doneAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.filter(isAssignmentDone).length,0),0);
+
+  wrap.appendChild(el(`<div class="card">
+    <h2>${escapeHtml(student.name)}</h2>
+    <div class="muted">${student.note ? escapeHtml(student.note) : 'Student overview'}</div>
+    <div class="stat-row">
+      <div class="stat"><div class="num">${courses.length}</div><div class="lbl">Courses</div></div>
+      <div class="stat"><div class="num">${doneAssignments}/${totalAssignments}</div><div class="lbl">Assignments done</div></div>
+      <div class="stat"><div class="num">${money(totalPaid)}</div><div class="lbl">Total paid</div></div>
+      <div class="stat"><div class="num" style="color:var(--rust)">${money(totalOutstanding)}</div><div class="lbl">Outstanding</div></div>
+    </div>
+  </div>`));
+
+  const top = el(`<div class="top-actions"></div>`);
+  top.appendChild(el(`<div class="muted">Enrolled courses</div>`));
+  const addCourseBtn = el(`<button class="moss">+ Add course</button>`);
+  addCourseBtn.onclick = ()=>{ view.addingCourse = true; view.screen='course'; view.courseIdx=null; render(); };
+  top.appendChild(addCourseBtn);
+  wrap.appendChild(top);
+
+  if(courses.length===0){
+    wrap.appendChild(el(`<div class="card"><div class="empty"><div class="big">No courses yet</div>Add an HNC, HND, or other course to begin tracking modules and assignments.</div></div>`));
+  } else {
+    courses.forEach((course, idx)=>{
+      const prog = courseProgress(course);
+      const complete = courseComplete(course);
+      const card = el(`<div class="card course-card">
+        <div class="course-head">
+          <div class="titles">
+            <h2>${escapeHtml(course.title)}</h2>
+            <div class="muted">${escapeHtml(course.level)}</div>
+            <div class="progress-outer"><div class="progress-inner" style="width:${prog}%"></div></div>
+          </div>
+          <span class="pill ${complete?'done':'progress'}">${complete? 'Complete' : prog+'% done'}</span>
+        </div>
+        <div class="row" style="margin-top:14px;">
+          <div class="muted">Paid so far: <strong style="color:var(--gold)">${money(coursePaidTotal(course))}</strong>${courseOutstanding(course)>0 ? ` &nbsp;·&nbsp; Outstanding: <strong style="color:var(--rust)">${money(courseOutstanding(course))}</strong>` : ''}</div>
+        </div>
+      </div>`);
+      card.querySelector('.course-head').addEventListener('click', ()=>{
+        view.screen='course'; view.courseIdx=idx; view.addingCourse=false; view.openModules={};
+        render();
+      });
+      wrap.appendChild(card);
+    });
+  }
+  return wrap;
+}
+
+/* ---------- Add-course flow ---------- */
+
+let addCourseState = null; // { catalogId, chosen: {groupIdx: [codes]} }
+
+function renderCourse(){
+  if(view.addingCourse) return renderAddCourse();
+  const courses = studentCourses[currentStudentId] || [];
+  const course = courses[view.courseIdx];
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Back to dashboard</button>`);
+  back.onclick = ()=>{ view={screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  const prog = courseProgress(course);
+  const head = el(`<div class="card">
+    <div class="course-head">
+      <div class="titles">
+        <h2>${escapeHtml(course.title)}</h2>
+        <div class="muted">${escapeHtml(course.level)}</div>
+        <div class="progress-outer"><div class="progress-inner" style="width:${prog}%"></div></div>
+      </div>
+      <span class="pill ${courseComplete(course)?'done':'progress'}">${courseComplete(course)?'Complete':prog+'% done'}</span>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="num">${course.modules.length}</div><div class="lbl">Modules</div></div>
+      <div class="stat"><div class="num">${course.modules.reduce((s,m)=>s+m.assignments.filter(isAssignmentDone).length,0)}/${course.modules.reduce((s,m)=>s+m.assignments.length,0)}</div><div class="lbl">Assignments done</div></div>
+      <div class="stat"><div class="num">${money(coursePaidTotal(course))}</div><div class="lbl">Paid so far</div></div>
+      <div class="stat"><div class="num" style="color:var(--rust)">${money(courseOutstanding(course))}</div><div class="lbl">Outstanding</div></div>
+    </div>
+  </div>`);
+  wrap.appendChild(head);
+
+  const modCard = el(`<div class="card"></div>`);
+  modCard.appendChild(el(`<h2>Modules</h2><div class="muted">Complete a module's assignments to unlock the next one.</div>`));
+
+  let priorComplete = true;
+  course.modules.forEach((m, mIdx)=>{
+    const locked = !priorComplete;
+    const done = moduleDone(m);
+    const isOpen = !!view.openModules[m.id] || (!locked && !done);
+    const modEl = el(`<div class="module"></div>`);
+    const status = locked ? 'locked' : done ? 'done' : 'progress';
+    const statusLabel = locked ? 'Locked' : done ? 'Complete' : 'In progress';
+    const head2 = el(`<div class="module-head">
+      <div class="mtitle">
+        <div class="midx ${locked?'locked':done?'done':''}">${done?'✓':(mIdx+1)}</div>
+        <div>
+          <div class="mname">${escapeHtml(m.name)}</div>
+          <div class="mcode">${escapeHtml(m.code)} · ${m.assignments.length} assignment${m.assignments.length===1?'':'s'}</div>
+        </div>
+      </div>
+      <span class="pill ${status}">${statusLabel}</span>
+    </div>`);
+    if(!locked){
+      head2.style.cursor='pointer';
+      head2.addEventListener('click', ()=>{
+        view.openModules[m.id] = !isOpen;
+        render();
+      });
+    }
+    modEl.appendChild(head2);
+
+    if(locked){
+      modEl.appendChild(el(`<div class="locked-note">Complete the previous module to unlock this one.</div>`));
+    } else if(isOpen){
+      const list = el(`<div class="assignments"></div>`);
+      m.assignments.forEach(a=>{
+        const rowClass = a.status==='done_paid' ? 'done' : a.status==='done_unpaid' ? 'due' : a.status==='done_self' ? 'self' : '';
+        const row = el(`<div class="assignment ${rowClass}">
+          <div class="alabel">${escapeHtml(a.label)}</div>
+        </div>`);
+
+        const seg = el(`<div class="status-seg"></div>`);
+        const options = [
+          { key:'done_unpaid', label:'Done — not yet paid' },
+          { key:'done_paid',   label:'Done — paid' },
+          { key:'done_self',   label:'Done independently' },
+        ];
+        options.forEach(opt=>{
+          const btn = el(`<button type="button" class="status-btn ${a.status===opt.key?'active '+opt.key:''}">${opt.label}</button>`);
+          btn.addEventListener('click', async ()=>{
+            // clicking the already-active state clears it back to "not started"
+            a.status = (a.status===opt.key) ? 'not_started' : opt.key;
+            if(a.status==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? null;
+            if(a.status==='not_started'){ a.paid = null; a.due = null; }
+            saveCourses(currentStudentId);
+            render();
+          });
+          seg.appendChild(btn);
+        });
+        row.appendChild(seg);
+
+        if(a.status==='done_unpaid'){
+          const dueWrap = el(`<div class="apaid"><span>amount due</span></div>`);
+          const dueInput = el(`<input type="number" min="0" step="0.01" placeholder="0.00" />`);
+          dueInput.value = a.due ?? '';
+          dueInput.addEventListener('change', async ()=>{
+            a.due = dueInput.value === '' ? 0 : Number(dueInput.value);
+            saveCourses(currentStudentId);
+            render();
+          });
+          dueWrap.appendChild(dueInput);
+          row.appendChild(dueWrap);
+        } else if(a.status==='done_paid'){
+          const payWrap = el(`<div class="apaid"><span>paid</span></div>`);
+          const payInput = el(`<input type="number" min="0" step="0.01" placeholder="0.00" />`);
+          payInput.value = a.paid ?? '';
+          payInput.addEventListener('change', async ()=>{
+            a.paid = payInput.value === '' ? 0 : Number(payInput.value);
+            saveCourses(currentStudentId);
+            render();
+          });
+          payWrap.appendChild(payInput);
+          row.appendChild(payWrap);
+        } else if(a.status==='done_self'){
+          row.appendChild(el(`<div class="self-note">Completed independently — no payment recorded</div>`));
+        }
+        list.appendChild(row);
+      });
+      modEl.appendChild(list);
+
+      const actions = el(`<div class="module-actions"></div>`);
+      const addA = el(`<button class="ghost" style="font-size:12px;padding:6px 12px;">+ Add assignment</button>`);
+      addA.onclick = async ()=>{
+        m.assignments.push({ id: uid(), label:'Assignment '+(m.assignments.length+1), status:'not_started', paid:null });
+        saveCourses(currentStudentId);
+        render();
+      };
+      actions.appendChild(addA);
+      if(m.assignments.length>1){
+        const rmA = el(`<button class="subtle" style="font-size:12px;">Remove last assignment</button>`);
+        rmA.onclick = async ()=>{
+          m.assignments.pop();
+          saveCourses(currentStudentId);
+          render();
+        };
+        actions.appendChild(rmA);
+      }
+      modEl.appendChild(actions);
+    }
+    modCard.appendChild(modEl);
+    priorComplete = priorComplete && done;
+  });
+
+  const btnRow = el(`<div class="row" style="margin-top:16px;"></div>`);
+  const cat = CATALOG.find(c=>c.id===course.catalogId);
+  if(cat && cat.groups && cat.groups.length){
+    const addElectiveBtn = el(`<button class="ghost">+ Add elective from catalog</button>`);
+    addElectiveBtn.onclick = ()=> openAddElectiveModal(course, cat);
+    btnRow.appendChild(addElectiveBtn);
+  }
+  const addModBtn = el(`<button class="ghost">+ Add custom module</button>`);
+  addModBtn.onclick = ()=> openAddModuleModal(course);
+  btnRow.appendChild(addModBtn);
+  modCard.appendChild(btnRow);
+
+  wrap.appendChild(modCard);
+
+  const dangerCard = el(`<div class="card">
+    <button class="subtle" id="removeCourseBtn">Remove this course from ${escapeHtml(students.find(s=>s.id===currentStudentId).name)}'s tracker</button>
+  </div>`);
+  dangerCard.querySelector('#removeCourseBtn').onclick = async ()=>{
+    if(confirm('Remove "'+course.title+'" and all its assignment/payment records? This cannot be undone.')){
+      studentCourses[currentStudentId].splice(view.courseIdx,1);
+      saveCourses(currentStudentId);
+      view = {screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{}};
+      render();
+    }
+  };
+  wrap.appendChild(dangerCard);
+
+  return wrap;
+}
+
+function openAddElectiveModal(course, cat){
+  const existingCodes = course.modules.map(m=>m.code);
+  const bg = el(`<div class="modal-bg"></div>`);
+  const modal = el(`<div class="modal"><h3>Add elective — ${escapeHtml(cat.title)}</h3></div>`);
+  let anyLeft = false;
+  cat.groups.forEach(g=>{
+    g.pools.forEach(pool=>{
+      const remaining = pool.options.filter(o=>!existingCodes.includes(o.code));
+      if(remaining.length===0) return;
+      anyLeft = true;
+      modal.appendChild(el(`<div class="grouptitle" style="margin:12px 0 4px;">${escapeHtml(g.title)} — ${escapeHtml(pool.label)}</div>`));
+      remaining.forEach(opt=>{
+        const row = el(`<div class="catalog-item" style="padding:10px 12px;">
+          <div><div class="ctitle" style="font-size:13px;">${escapeHtml(opt.code)} — ${escapeHtml(opt.name)}</div></div>
+          <button class="ghost" style="font-size:12px;padding:6px 12px;">+ Add</button>
+        </div>`);
+        row.querySelector('button').onclick = ()=>{
+          course.modules.push(makeModule(opt.code, opt.name, 1));
+          saveCourses(currentStudentId);
+          bg.remove();
+          toast(opt.code+' added to the module ledger');
+          render();
+        };
+        modal.appendChild(row);
+      });
+    });
+  });
+  if(!anyLeft){
+    modal.appendChild(el(`<div class="muted">All catalog units for this course have already been added.</div>`));
+  }
+  const closeBtn = el(`<button class="ghost" style="margin-top:14px;">Close</button>`);
+  closeBtn.onclick = ()=> bg.remove();
+  modal.appendChild(closeBtn);
+  bg.appendChild(modal);
+  bg.onclick = e=>{ if(e.target===bg) bg.remove(); };
+  document.body.appendChild(bg);
+}
+
+function openAddModuleModal(course){
+  const bg = el(`<div class="modal-bg"></div>`);
+  const modal = el(`<div class="modal">
+    <h3>Add custom module</h3>
+    <div class="field"><label>Module code</label><input id="modCode" placeholder="e.g. U-EXTRA" /></div>
+    <div class="field"><label>Module name</label><input id="modName" placeholder="e.g. Extra Elective" /></div>
+    <div class="field"><label>Number of assignments</label><input id="modCount" type="number" min="1" max="10" value="1" /></div>
+    <div class="row">
+      <button class="ghost" id="cancelMod">Cancel</button>
+      <button class="moss" id="confirmMod">Add module</button>
+    </div>
+  </div>`);
+  bg.appendChild(modal);
+  document.body.appendChild(bg);
+  modal.querySelector('#cancelMod').onclick = ()=> bg.remove();
+  bg.onclick = e=>{ if(e.target===bg) bg.remove(); };
+  modal.querySelector('#confirmMod').onclick = async ()=>{
+    const code = modal.querySelector('#modCode').value.trim() || 'U-'+(course.modules.length+1);
+    const name = modal.querySelector('#modName').value.trim();
+    const count = Math.max(1, Math.min(10, Number(modal.querySelector('#modCount').value)||1));
+    if(!name){ toast('Please name the module'); return; }
+    course.modules.push(makeModule(code, name, count));
+    saveCourses(currentStudentId);
+    bg.remove();
+    render();
+  };
+}
+
+function renderAddCourse(){
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Back to dashboard</button>`);
+  back.onclick = ()=>{ addCourseState=null; view={screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  if(!addCourseState){
+    const card = el(`<div class="card"><h2>Choose a course</h2><div class="muted">Pick a course to enrol in. You'll then select electives and the app builds the module list — including any electives you choose.</div><div class="catalog-list" id="catList"></div></div>`);
+    const list = card.querySelector('#catList');
+    CATALOG.forEach(c=>{
+      const item = el(`<div class="catalog-item">
+        <div>
+          <div class="ctitle">${escapeHtml(c.title)}</div>
+          <div class="cmeta">${escapeHtml(c.level)}</div>
+        </div>
+        <span class="pill ${c.verified?'done':'progress'}">${c.verified?'Verified units':'Editable template'}</span>
+      </div>`);
+      item.onclick = ()=>{
+        addCourseState = { catalogId:c.id, chosen:{} };
+        render();
+      };
+      list.appendChild(item);
+    });
+    const customBtn = el(`<button class="ghost" style="margin-top:14px;">+ Create a fully custom course</button>`);
+    customBtn.onclick = async ()=>{
+      const title = prompt('Course name?');
+      if(!title) return;
+      const level = prompt('Level / awarding body (optional)') || '';
+      const course = { id: uid(), catalogId:'custom', title, level, modules:[] };
+      studentCourses[currentStudentId].push(course);
+      saveCourses(currentStudentId);
+      addCourseState = null;
+      view = { screen:'course', courseIdx: studentCourses[currentStudentId].length-1, addingCourse:false, openModules:{} };
+      render();
+    };
+    card.appendChild(customBtn);
+    wrap.appendChild(card);
+    return wrap;
+  }
+
+  // elective selection screen
+  const cat = CATALOG.find(c=>c.id===addCourseState.catalogId);
+  const card = el(`<div class="card">
+    <h2>${escapeHtml(cat.title)}</h2>
+    <div class="muted">${escapeHtml(cat.level)}</div>
+  </div>`);
+  wrap.appendChild(card);
+
+  const coreCard = el(`<div class="card"><h2>Core units (included automatically)</h2></div>`);
+  const coreList = el(`<div style="margin-top:10px;"></div>`);
+  cat.core.forEach(m=> coreList.appendChild(el(`<div class="elective-opt">✓ <strong>${escapeHtml(m.code)}</strong> — ${escapeHtml(m.name)}</div>`)));
+  coreCard.appendChild(coreList);
+  wrap.appendChild(coreCard);
+
+  cat.groups.forEach((g, gIdx)=>{
+    if(!addCourseState.chosen[gIdx]) addCourseState.chosen[gIdx] = [];
+    const gCard = el(`<div class="card"><h2>${escapeHtml(g.title)}</h2></div>`);
+    g.pools.forEach(pool=>{
+      const box = el(`<div class="elective-box"><div class="grouptitle">${escapeHtml(pool.label)}</div></div>`);
+      pool.options.forEach(opt=>{
+        const checked = addCourseState.chosen[gIdx].includes(opt.code);
+        const row = el(`<label class="elective-opt"><input type="checkbox" ${checked?'checked':''}/> <strong>${escapeHtml(opt.code)}</strong> — ${escapeHtml(opt.name)}</label>`);
+        const cb = row.querySelector('input');
+        cb.addEventListener('change', ()=>{
+          const arr = addCourseState.chosen[gIdx];
+          if(cb.checked){
+            if(g.lockedPair){
+              // restrict to one pool only
+              const poolCodes = pool.options.map(o=>o.code);
+              const chosenOutsidePool = arr.some(code => !poolCodes.includes(code));
+              if(chosenOutsidePool){ cb.checked=false; toast('Choose both units from the SAME group only'); return; }
+            }
+            if(arr.length >= g.chooseCount){ cb.checked=false; toast('You can choose '+g.chooseCount+' for this group'); return; }
+            arr.push(opt.code);
+          } else {
+            addCourseState.chosen[gIdx] = arr.filter(c=>c!==opt.code);
+          }
+          render();
+        });
+        box.appendChild(row);
+      });
+      gCard.appendChild(box);
+    });
+    gCard.appendChild(el(`<div class="count-flag">${addCourseState.chosen[gIdx].length} / ${g.chooseCount} selected</div>`));
+    wrap.appendChild(gCard);
+  });
+
+  const actionCard = el(`<div class="card"></div>`);
+  const anyChosen = cat.groups.some((g,gIdx)=> addCourseState.chosen[gIdx].length>0);
+  const allSatisfied = cat.groups.every((g,gIdx)=> addCourseState.chosen[gIdx].length === g.chooseCount);
+  actionCard.appendChild(el(`<div class="muted" style="margin-bottom:10px;">Core units are always included. You don't need to pick every elective now — create the course and add the rest later from the course page.</div>`));
+  const confirmBtn = el(`<button class="moss">${allSatisfied ? 'Create course &amp; build module ledger' : anyChosen ? 'Create course with these units so far' : 'Create course with core units only'}</button>`);
+  confirmBtn.onclick = async ()=>{
+    const modules = [];
+    cat.core.forEach(m=> modules.push(makeModule(m.code, m.name, 1)));
+    cat.groups.forEach((g,gIdx)=>{
+      addCourseState.chosen[gIdx].forEach(code=>{
+        let opt;
+        g.pools.forEach(p=>{ const f=p.options.find(o=>o.code===code); if(f) opt=f; });
+        if(opt) modules.push(makeModule(opt.code, opt.name, 1));
+      });
+    });
+    const course = { id: uid(), catalogId: cat.id, title: cat.title, level: cat.level, modules };
+    studentCourses[currentStudentId].push(course);
+    saveCourses(currentStudentId);
+    addCourseState = null;
+    view = { screen:'course', courseIdx: studentCourses[currentStudentId].length-1, addingCourse:false, openModules:{} };
+    toast(allSatisfied ? 'Course added — set assignment counts per module as needed' : 'Course added — you can add remaining electives anytime from this page');
+    render();
+  };
+  actionCard.appendChild(confirmBtn);
+  const cancelBtn = el(`<button class="ghost" style="margin-left:10px;">Cancel</button>`);
+  cancelBtn.onclick = ()=>{ addCourseState=null; render(); };
+  actionCard.appendChild(cancelBtn);
+  wrap.appendChild(actionCard);
+
+  return wrap;
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ===================== INIT ===================== */
+function init(){
+  initFirebase();
+  if(authError){ authReady = true; render(); return; }
+  auth.onAuthStateChanged(user=>{
+    currentUser = user;
+    authReady = true;
+    if(user){
+      view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
+      attachStudentsListener();
+    } else {
+      if(studentsUnsub){ studentsUnsub(); studentsUnsub=null; }
+      students = []; studentCourses = {}; currentStudentId = null; dataReady = false;
+    }
+    render();
+  });
+  render();
+}
+init();
+</script>
+</body>
+</html>

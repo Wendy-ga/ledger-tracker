@@ -155,6 +155,10 @@
   .assignment .apaid{display:flex; align-items:center; gap:6px; width:100%; justify-content:flex-end;}
   .assignment .apaid input{width:90px; padding:6px 8px; font-size:13px;}
   .assignment .apaid span{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--gold);}
+  .date-row{display:flex; justify-content:flex-end; gap:10px; width:100%;}
+  .adate{display:flex; align-items:center; gap:6px;}
+  .adate input{width:140px; padding:5px 8px; font-size:12px;}
+  .adate span{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em;}
   .self-note{width:100%; text-align:right; font-size:11.5px; font-style:italic; color:var(--gold);}
   .locked-note{margin-left:36px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
 
@@ -422,6 +426,19 @@ let view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:
 
 const uid = () => Math.random().toString(36).slice(2,10);
 const money = n => '£' + (Number(n)||0).toFixed(2);
+function toDateInputValue(ts){
+  const d = new Date(ts);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function fromDateInputValue(str){
+  // interpret as local midday to avoid timezone rollover issues when displaying the date back
+  const [y,m,d] = str.split('-').map(Number);
+  return new Date(y, m-1, d, 12, 0, 0).getTime();
+}
+function currentStudentName(){
+  const s = students.find(x=>x.id===currentStudentId);
+  return s ? s.name : null;
+}
 
 /* ===================== FIREBASE (AUTH + LIVE DATA) ===================== */
 let fbApp, auth, db;
@@ -480,6 +497,36 @@ async function saveCourses(studentId){
   }
 }
 
+function logActivity(action, detail, studentName){
+  if(!db || !currentUser) return;
+  db.collection('activity').add({
+    action,
+    detail: detail || '',
+    studentName: studentName || null,
+    byEmail: currentUser.email,
+    timestamp: Date.now()
+  }).catch(e=> console.error('logActivity failed', e));
+}
+
+let activityUnsub = null;
+let activityLog = [];
+function attachActivityListener(){
+  if(activityUnsub) activityUnsub();
+  activityUnsub = db.collection('activity').orderBy('timestamp','desc').limit(150).onSnapshot(snap=>{
+    activityLog = snap.docs.map(d=>d.data());
+    if(view.screen==='activity') render();
+  }, err=> console.error('activity listener failed', err));
+}
+
+function timeAgo(ts){
+  const s = Math.floor((Date.now()-ts)/1000);
+  if(s<60) return 'just now';
+  const m = Math.floor(s/60); if(m<60) return m+'m ago';
+  const h = Math.floor(m/60); if(h<24) return h+'h ago';
+  const d = Math.floor(h/24); if(d<30) return d+'d ago';
+  return new Date(ts).toLocaleDateString();
+}
+
 function toast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -516,6 +563,83 @@ function courseOutstanding(course){
 }
 function courseComplete(course){ return course.modules.length>0 && course.modules.every(moduleDone); }
 
+/* ===================== REPORTING HELPERS =====================
+   Note: completedAt / paidAt timestamps only exist on assignments marked
+   done AFTER this feature was added. Older records marked done before
+   won't have a date, so they're excluded from week/month/year reports
+   (but still counted in all-time totals like "Total paid"/"Outstanding"). */
+
+function startOfWeek(d=new Date()){
+  const day = d.getDay();
+  const diff = (day===0 ? -6 : 1-day); // week starts Monday
+  const m = new Date(d); m.setHours(0,0,0,0); m.setDate(d.getDate()+diff);
+  return m.getTime();
+}
+function startOfMonth(d=new Date()){ return new Date(d.getFullYear(), d.getMonth(), 1).getTime(); }
+function startOfYear(d=new Date()){ return new Date(d.getFullYear(), 0, 1).getTime(); }
+function periodStart(period){
+  if(period==='week') return startOfWeek();
+  if(period==='month') return startOfMonth();
+  if(period==='year') return startOfYear();
+  return 0;
+}
+
+// Flatten every assignment across every active student into one list, tagged with student/course/module context
+function allAssignmentsFlat(){
+  const rows = [];
+  students.forEach(s=>{
+    (studentCourses[s.id]||[]).forEach(c=>{
+      c.modules.forEach(m=>{
+        m.assignments.forEach(a=>{
+          rows.push(Object.assign({}, a, { studentId:s.id, studentName:s.name, courseTitle:c.title, moduleName:m.name }));
+        });
+      });
+    });
+  });
+  return rows;
+}
+
+// Total currently owed (done_unpaid) across all students, plus a per-student breakdown — this is a live snapshot, not period-based
+function globalOwed(){
+  let total = 0;
+  const byStudent = [];
+  students.forEach(s=>{
+    let owed = 0;
+    (studentCourses[s.id]||[]).forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
+      if(a.status==='done_unpaid') owed += Number(a.due)||0;
+    })));
+    if(owed>0) byStudent.push({ id:s.id, name:s.name, amount:owed });
+    total += owed;
+  });
+  byStudent.sort((a,b)=>b.amount-a.amount);
+  return { total, byStudent };
+}
+
+// How many assignments were newly completed (any done_* status) since a given timestamp
+function completedSince(ts){
+  return allAssignmentsFlat().filter(a=>a.completedAt && a.completedAt>=ts).length;
+}
+
+// Report for a given period: total paid, total assignments completed, per-student breakdown
+function reportForPeriod(period){
+  const since = periodStart(period);
+  const rows = allAssignmentsFlat();
+  const completed = rows.filter(a=>a.completedAt && a.completedAt>=since);
+  const paidRows = rows.filter(a=>a.status==='done_paid' && a.paidAt && a.paidAt>=since);
+  const totalPaid = paidRows.reduce((s,a)=>s+(Number(a.paid)||0),0);
+  const byStudent = {};
+  completed.forEach(a=>{
+    if(!byStudent[a.studentId]) byStudent[a.studentId] = { name:a.studentName, completed:0, paid:0 };
+    byStudent[a.studentId].completed++;
+  });
+  paidRows.forEach(a=>{
+    if(!byStudent[a.studentId]) byStudent[a.studentId] = { name:a.studentName, completed:0, paid:0 };
+    byStudent[a.studentId].paid += Number(a.paid)||0;
+  });
+  const list = Object.values(byStudent).sort((a,b)=> b.paid-a.paid || b.completed-a.completed);
+  return { completedCount: completed.length, totalPaid, byStudent: list };
+}
+
 /* ===================== RENDER ===================== */
 
 function el(html){ const d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstElementChild; }
@@ -548,6 +672,8 @@ function render(){
   else if(view.screen==='dashboard') app.appendChild(renderDashboard());
   else if(view.screen==='course') app.appendChild(renderCourse());
   else if(view.screen==='trash') app.appendChild(renderTrash());
+  else if(view.screen==='reports') app.appendChild(renderReports());
+  else if(view.screen==='activity') app.appendChild(renderActivity());
   app.appendChild(el(`<div class="footer-note">THE LEDGER — a quiet place to track modules, assignments &amp; what's been paid</div>`));
 }
 
@@ -611,6 +737,7 @@ function renderBrand(){
         sw.appendChild(homeBtn);
       }
     }
+    sw.appendChild(el(`<span class="muted" style="font-size:11.5px; font-family:'IBM Plex Mono',monospace;">${escapeHtml(currentUser.email||'')}</span>`));
     if(isReadOnly){
       sw.appendChild(el(`<span class="pill locked" title="You can view everything but can't make changes">View only</span>`));
     }
@@ -627,6 +754,33 @@ function renderProfiles(){
     <h2>Students</h2>
     <div class="muted">Create an account for each student, then track their courses, modules and assignment payments.</div>
   </div>`));
+
+  const owed = globalOwed();
+  const weekCompleted = completedSince(startOfWeek());
+  const summaryCard = el(`<div class="card">
+    <div class="stat-row">
+      <div class="stat"><div class="num">${students.length}</div><div class="lbl">Active students</div></div>
+      <div class="stat"><div class="num">${weekCompleted}</div><div class="lbl">Assignments done this week</div></div>
+      <div class="stat"><div class="num" style="color:var(--rust)">${money(owed.total)}</div><div class="lbl">Total owed</div></div>
+    </div>
+  </div>`);
+  if(owed.byStudent.length>0){
+    const owedList = el(`<div style="margin-top:14px;"></div>`);
+    owedList.appendChild(el(`<div class="grouptitle" style="margin-bottom:8px;">Who owes what</div>`));
+    owed.byStudent.forEach(o=>{
+      owedList.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:5px 0;">
+        <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount)}</span>
+      </div>`));
+    });
+    summaryCard.appendChild(owedList);
+  }
+  const reportsBtn = el(`<button class="ghost" style="margin-top:14px;">📊 View reports</button>`);
+  reportsBtn.onclick = ()=>{ view = { screen:'reports', courseIdx:null, addingCourse:false, openModules:{}, reportPeriod:'week' }; render(); };
+  summaryCard.appendChild(reportsBtn);
+  const activityBtn = el(`<button class="ghost" style="margin-top:14px; margin-left:10px;">🕒 Activity log</button>`);
+  activityBtn.onclick = ()=>{ view = { screen:'activity', courseIdx:null, addingCourse:false, openModules:{} }; render(); };
+  summaryCard.appendChild(activityBtn);
+  wrap.appendChild(summaryCard);
 
   const listCard = el(`<div class="card"></div>`);
   if(students.length===0){
@@ -674,6 +828,7 @@ async function softDeleteStudent(s){
   try{
     await db.collection('students').doc(s.id).update({ deleted:true, deletedAt: Date.now() });
     if(currentStudentId===s.id){ currentStudentId=null; view={screen:'profiles',courseIdx:null,addingCourse:false,openModules:{}}; }
+    logActivity('Deleted student (moved to trash)', '', s.name);
     toast(s.name+' moved to trash');
   }catch(e){
     console.error('soft delete failed', e);
@@ -703,6 +858,7 @@ function openEditStudentModal(s){
     try{
       await db.collection('students').doc(s.id).update({ name, note });
       bg.remove();
+      logActivity('Edited student details', s.name!==name ? `Renamed from "${s.name}" to "${name}"` : 'Updated note', name);
       toast('Details updated for '+name);
     }catch(e){
       console.error('edit student failed', e);
@@ -741,6 +897,7 @@ function renderTrash(){
     restoreBtn.onclick = async ()=>{
       try{
         await db.collection('students').doc(s.id).update({ deleted:false, deletedAt:null });
+        logActivity('Restored student from trash', '', s.name);
         toast(s.name+' restored');
       }catch(e){
         console.error('restore failed', e);
@@ -752,6 +909,7 @@ function renderTrash(){
       if(!confirm('Permanently delete "'+s.name+'" and all their records? This cannot be undone.')) return;
       try{
         await db.collection('students').doc(s.id).delete();
+        logActivity('Permanently deleted student', '', s.name);
         toast(s.name+' permanently deleted');
       }catch(e){
         console.error('permanent delete failed', e);
@@ -763,6 +921,124 @@ function renderTrash(){
     btnRow.appendChild(permDelBtn);
     wrap.appendChild(card);
   });
+  return wrap;
+}
+
+async function backfillMissingTimestamps(count){
+  if(!confirm('This will stamp today\'s date onto '+count+' already-completed assignment(s) that have no record of when they were done. It\'s an approximation, not the real date — but it means they\'ll start counting in this week/month/year from now on. Continue?')) return;
+  const now = Date.now();
+  const affectedStudents = new Set();
+  students.forEach(s=>{
+    (studentCourses[s.id]||[]).forEach(c=>{
+      c.modules.forEach(m=>{
+        m.assignments.forEach(a=>{
+          if(isAssignmentDone(a) && !a.completedAt){
+            a.completedAt = now;
+            if(a.status==='done_paid' && !a.paidAt) a.paidAt = now;
+            affectedStudents.add(s.id);
+          }
+        });
+      });
+    });
+  });
+  for(const id of affectedStudents){ await saveCourses(id); }
+  toast('Backfilled dates for '+affectedStudents.size+' student(s)');
+  render();
+}
+
+function renderReports(){
+  const period = view.reportPeriod || 'week';
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Back to students</button>`);
+  back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  wrap.appendChild(el(`<div class="card">
+    <h2>Reports</h2>
+    <div class="muted">Assignments completed and money collected, across all students. Only records completed after reporting was added are included in these date-based figures — older completions still count in each student's all-time totals.</div>
+  </div>`));
+
+  const missingCount = allAssignmentsFlat().filter(a=>isAssignmentDone(a) && !a.completedAt).length;
+  if(missingCount>0){
+    const backfillCard = el(`<div class="card" style="border-left:4px solid var(--rust);">
+      <div class="muted">${missingCount} assignment${missingCount===1?'':'s'} ${missingCount===1?'was':'were'} marked done before reporting existed, so ${missingCount===1?'it has':'they have'} no completion date and won't show up in the counts below.</div>
+    </div>`);
+    const backfillBtn = lockIfReadOnly(el(`<button class="ghost" style="margin-top:10px;">Backfill missing dates to today</button>`));
+    backfillBtn.onclick = ()=> backfillMissingTimestamps(missingCount);
+    backfillCard.appendChild(backfillBtn);
+    wrap.appendChild(backfillCard);
+  }
+
+  const periodCard = el(`<div class="card"></div>`);
+  const tabs = el(`<div class="row" style="gap:8px;"></div>`);
+  [['week','This week'],['month','This month'],['year','This year']].forEach(([key,label])=>{
+    const btn = el(`<button class="${period===key?'moss':'ghost'}" style="flex:1;">${label}</button>`);
+    btn.onclick = ()=>{ view.reportPeriod = key; render(); };
+    tabs.appendChild(btn);
+  });
+  periodCard.appendChild(tabs);
+
+  const report = reportForPeriod(period);
+  periodCard.appendChild(el(`<div class="stat-row" style="margin-top:16px;">
+    <div class="stat"><div class="num">${report.completedCount}</div><div class="lbl">Assignments completed</div></div>
+    <div class="stat"><div class="num">${money(report.totalPaid)}</div><div class="lbl">Money collected</div></div>
+  </div>`));
+  wrap.appendChild(periodCard);
+
+  const byStudentCard = el(`<div class="card"><h2>By student</h2></div>`);
+  if(report.byStudent.length===0){
+    byStudentCard.appendChild(el(`<div class="empty" style="padding:24px;">Nothing recorded for this period yet.</div>`));
+  } else {
+    report.byStudent.forEach(row=>{
+      byStudentCard.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:8px 0; border-top:1px dashed var(--line);">
+        <span><strong>${escapeHtml(row.name)}</strong> — ${row.completed} assignment${row.completed===1?'':'s'} completed</span>
+        <span style="color:var(--gold); font-family:'IBM Plex Mono',monospace;">${money(row.paid)}</span>
+      </div>`));
+    });
+  }
+  wrap.appendChild(byStudentCard);
+
+  const owed = globalOwed();
+  const owedCard = el(`<div class="card"><h2>Currently outstanding (all-time)</h2><div class="muted">Not period-specific — this is what's owed right now.</div></div>`);
+  if(owed.byStudent.length===0){
+    owedCard.appendChild(el(`<div class="empty" style="padding:24px;">Nobody currently owes anything.</div>`));
+  } else {
+    owed.byStudent.forEach(o=>{
+      owedCard.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:8px 0; border-top:1px dashed var(--line);">
+        <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount)}</span>
+      </div>`));
+    });
+  }
+  wrap.appendChild(owedCard);
+
+  return wrap;
+}
+
+function renderActivity(){
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Back to students</button>`);
+  back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  wrap.appendChild(el(`<div class="card">
+    <h2>Activity log</h2>
+    <div class="muted">Who changed what, and when. Shows the most recent ${activityLog.length} action${activityLog.length===1?'':'s'}.</div>
+  </div>`));
+
+  const listCard = el(`<div class="card"></div>`);
+  if(activityLog.length===0){
+    listCard.appendChild(el(`<div class="empty" style="padding:24px;">No activity recorded yet.</div>`));
+  } else {
+    activityLog.forEach(entry=>{
+      const row = el(`<div style="padding:10px 0; border-top:1px dashed var(--line); font-size:13.5px;">
+        <div><strong>${escapeHtml(entry.byEmail||'unknown')}</strong> — ${escapeHtml(entry.action)}${entry.studentName ? ' · <span style="color:var(--moss-deep)">'+escapeHtml(entry.studentName)+'</span>' : ''}</div>
+        ${entry.detail ? `<div class="muted" style="margin-top:2px;">${escapeHtml(entry.detail)}</div>` : ''}
+        <div class="muted" style="font-family:'IBM Plex Mono',monospace; font-size:11px; margin-top:2px;">${timeAgo(entry.timestamp)}</div>
+      </div>`);
+      listCard.appendChild(row);
+    });
+  }
+  wrap.appendChild(listCard);
   return wrap;
 }
 
@@ -789,6 +1065,7 @@ function openAddStudentModal(){
     try{
       await db.collection('students').doc(id).set({ name, note, createdAt: Date.now(), courses: [] });
       bg.remove();
+      logActivity('Added new student', '', name);
       toast('Account created for '+name);
     }catch(e){
       console.error('create student failed', e);
@@ -953,15 +1230,38 @@ function renderCourse(){
           const btn = lockIfReadOnly(el(`<button type="button" class="status-btn ${a.status===opt.key?'active '+opt.key:''}">${opt.label}</button>`));
           btn.addEventListener('click', async ()=>{
             // clicking the already-active state clears it back to "not started"
-            a.status = (a.status===opt.key) ? 'not_started' : opt.key;
-            if(a.status==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? null;
-            if(a.status==='not_started'){ a.paid = null; a.due = null; }
+            const newStatus = (a.status===opt.key) ? 'not_started' : opt.key;
+            a.status = newStatus;
+            if(newStatus==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? null;
+            if(newStatus==='not_started'){
+              a.paid = null; a.due = null; a.completedAt = null; a.paidAt = null;
+            } else {
+              if(!a.completedAt) a.completedAt = Date.now();
+              if(newStatus==='done_paid') a.paidAt = Date.now();
+            }
             saveCourses(currentStudentId);
+            const statusLabels = { not_started:'Not done', done_unpaid:'Done — not yet paid', done_paid:'Done — paid', done_self:'Done independently' };
+            logActivity('Marked assignment: '+statusLabels[newStatus], `${m.name} — ${a.label}`, currentStudentName());
             render();
           });
           seg.appendChild(btn);
         });
         row.appendChild(seg);
+
+        if(a.status!=='not_started'){
+          const dateRow = el(`<div class="date-row"></div>`);
+          const completedWrap = el(`<div class="adate"><span>completed</span></div>`);
+          const completedInput = lockIfReadOnly(el(`<input type="date" />`));
+          completedInput.value = a.completedAt ? toDateInputValue(a.completedAt) : '';
+          completedInput.addEventListener('change', ()=>{
+            a.completedAt = completedInput.value ? fromDateInputValue(completedInput.value) : null;
+            saveCourses(currentStudentId);
+            logActivity('Set completion date', `${m.name} — ${a.label} → ${completedInput.value}`, currentStudentName());
+          });
+          completedWrap.appendChild(completedInput);
+          dateRow.appendChild(completedWrap);
+          row.appendChild(dateRow);
+        }
 
         if(a.status==='done_unpaid'){
           const dueWrap = el(`<div class="apaid"><span>amount due</span></div>`);
@@ -970,6 +1270,7 @@ function renderCourse(){
           dueInput.addEventListener('change', async ()=>{
             a.due = dueInput.value === '' ? 0 : Number(dueInput.value);
             saveCourses(currentStudentId);
+            logActivity('Updated amount due', `${m.name} — ${a.label} → ${money(a.due)}`, currentStudentName());
             render();
           });
           dueWrap.appendChild(dueInput);
@@ -981,10 +1282,22 @@ function renderCourse(){
           payInput.addEventListener('change', async ()=>{
             a.paid = payInput.value === '' ? 0 : Number(payInput.value);
             saveCourses(currentStudentId);
+            logActivity('Updated amount paid', `${m.name} — ${a.label} → ${money(a.paid)}`, currentStudentName());
             render();
           });
           payWrap.appendChild(payInput);
           row.appendChild(payWrap);
+
+          const paidDateWrap = el(`<div class="adate"><span>paid on</span></div>`);
+          const paidDateInput = lockIfReadOnly(el(`<input type="date" />`));
+          paidDateInput.value = a.paidAt ? toDateInputValue(a.paidAt) : '';
+          paidDateInput.addEventListener('change', ()=>{
+            a.paidAt = paidDateInput.value ? fromDateInputValue(paidDateInput.value) : null;
+            saveCourses(currentStudentId);
+            logActivity('Set payment date', `${m.name} — ${a.label} → ${paidDateInput.value}`, currentStudentName());
+          });
+          paidDateWrap.appendChild(paidDateInput);
+          row.appendChild(paidDateWrap);
         } else if(a.status==='done_self'){
           row.appendChild(el(`<div class="self-note">Completed independently — no payment recorded</div>`));
         }
@@ -1037,6 +1350,7 @@ function renderCourse(){
     if(confirm('Remove "'+course.title+'" and all its assignment/payment records? This cannot be undone.')){
       studentCourses[currentStudentId].splice(view.courseIdx,1);
       saveCourses(currentStudentId);
+      logActivity('Removed course', course.title, currentStudentName());
       view = {screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{}};
       render();
     }
@@ -1143,6 +1457,7 @@ function renderAddCourse(){
       const course = { id: uid(), catalogId:'custom', title, level, modules:[] };
       studentCourses[currentStudentId].push(course);
       saveCourses(currentStudentId);
+      logActivity('Added custom course', title, currentStudentName());
       addCourseState = null;
       view = { screen:'course', courseIdx: studentCourses[currentStudentId].length-1, addingCourse:false, openModules:{} };
       render();
@@ -1217,6 +1532,7 @@ function renderAddCourse(){
     const course = { id: uid(), catalogId: cat.id, title: cat.title, level: cat.level, modules };
     studentCourses[currentStudentId].push(course);
     saveCourses(currentStudentId);
+    logActivity('Added course', cat.title, currentStudentName());
     addCourseState = null;
     view = { screen:'course', courseIdx: studentCourses[currentStudentId].length-1, addingCourse:false, openModules:{} };
     toast(allSatisfied ? 'Course added — set assignment counts per module as needed' : 'Course added — you can add remaining electives anytime from this page');
@@ -1246,9 +1562,11 @@ function init(){
     if(user){
       view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
       attachStudentsListener();
+      attachActivityListener();
     } else {
       if(studentsUnsub){ studentsUnsub(); studentsUnsub=null; }
-      students = []; studentCourses = {}; currentStudentId = null; dataReady = false;
+      if(activityUnsub){ activityUnsub(); activityUnsub=null; }
+      students = []; studentCourses = {}; currentStudentId = null; dataReady = false; activityLog = [];
     }
     render();
   });

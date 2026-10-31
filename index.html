@@ -160,6 +160,8 @@
   .adate input{width:140px; padding:5px 8px; font-size:12px;}
   .adate span{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em;}
   .self-note{width:100%; text-align:right; font-size:11.5px; font-style:italic; color:var(--gold);}
+  .share-note{width:100%; text-align:right; font-size:11.5px; font-family:'IBM Plex Mono',monospace; color:var(--moss-deep);}
+  .stat .num.dual{font-size:17px; line-height:1.35;}
   .locked-note{margin-left:36px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
 
   .module-actions{display:flex; gap:8px; margin-left:36px; margin-top:8px;}
@@ -425,7 +427,23 @@ let studentCourses = {}; // studentId -> [courseInstance] — populated live fro
 let view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
 
 const uid = () => Math.random().toString(36).slice(2,10);
-const money = n => '£' + (Number(n)||0).toFixed(2);
+/* ===================== CURRENCY ===================== */
+// Each student is billed in one currency (GBP or USD). Students created before
+// currencies existed are treated as GBP, which is what they were all using.
+const CURRENCIES = { GBP:{ symbol:'£', name:'Pounds' }, USD:{ symbol:'$', name:'US dollars' } };
+const CURRENCY_LIST = ['GBP','USD'];
+const DEFAULT_SHARE_USD = 20;   // Jafter's share per paid assignment unless a student says otherwise
+const DEFAULT_RATE = 1.30;      // USD per 1 GBP, used until a rate is saved on the Balance sheet
+const money = (n, cur='GBP') => (CURRENCIES[cur] ? CURRENCIES[cur].symbol : '£') + (Number(n)||0).toFixed(2);
+const round2 = n => Math.round((Number(n)||0)*100)/100;
+const emptyTotals = () => ({ GBP:0, USD:0 });
+function studentCurrency(s){ return s && CURRENCIES[s.currency] ? s.currency : 'GBP'; }
+function currencyOfId(id){ return studentCurrency(students.find(x=>x.id===id)); }
+
+// Exchange rate (USD per 1 GBP) lives in Firestore at settings/app so every user sees the same one.
+let exchangeRate = DEFAULT_RATE;
+let rateIsSet = false;
+let payouts = [];   // money paid out to Jafter, newest first
 function toDateInputValue(ts){
   const d = new Date(ts);
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -472,7 +490,12 @@ function attachStudentsListener(){
     trashedStudents = [];
     snap.forEach(doc=>{
       const d = doc.data();
-      const rec = { id: doc.id, name: d.name, note: d.note || '', createdAt: d.createdAt, deletedAt: d.deletedAt || null };
+      const rec = {
+        id: doc.id, name: d.name, note: d.note || '', createdAt: d.createdAt, deletedAt: d.deletedAt || null,
+        currency: CURRENCIES[d.currency] ? d.currency : 'GBP',
+        jafterShareUsd: (typeof d.jafterShareUsd === 'number') ? d.jafterShareUsd : DEFAULT_SHARE_USD,
+        defaultPrice: (typeof d.defaultPrice === 'number') ? d.defaultPrice : null
+      };
       if(d.deleted){ trashedStudents.push(rec); } else { students.push(rec); }
       const courses = d.courses || [];
       courses.forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
@@ -516,6 +539,26 @@ function attachActivityListener(){
     activityLog = snap.docs.map(d=>d.data());
     if(view.screen==='activity') render();
   }, err=> console.error('activity listener failed', err));
+}
+
+let settingsUnsub = null;
+function attachSettingsListener(){
+  if(settingsUnsub) settingsUnsub();
+  settingsUnsub = db.collection('settings').doc('app').onSnapshot(doc=>{
+    const d = doc.exists ? doc.data() : null;
+    if(d && Number(d.usdPerGbp) > 0){ exchangeRate = Number(d.usdPerGbp); rateIsSet = true; }
+    else { exchangeRate = DEFAULT_RATE; rateIsSet = false; }
+    if(dataReady) render();
+  }, err=> console.error('settings listener failed', err));
+}
+
+let payoutsUnsub = null;
+function attachPayoutsListener(){
+  if(payoutsUnsub) payoutsUnsub();
+  payoutsUnsub = db.collection('payouts').orderBy('date','desc').onSnapshot(snap=>{
+    payouts = snap.docs.map(d=>Object.assign({ id:d.id }, d.data()));
+    if(dataReady) render();
+  }, err=> console.error('payouts listener failed', err));
 }
 
 function timeAgo(ts){
@@ -563,6 +606,87 @@ function courseOutstanding(course){
 }
 function courseComplete(course){ return course.modules.length>0 && course.modules.every(moduleDone); }
 
+/* ===================== JAFTER'S SHARE + BALANCE SHEET =====================
+   Rules, as set by the business:
+   - Every paid assignment is split between two people. Jafter's cut is a flat
+     USD amount per assignment (set on each student: $30 or $20 etc).
+   - If the student pays in pounds, his cut is that USD amount converted at the
+     exchange rate saved on the Balance sheet, and he is owed it in pounds.
+   - The cut is worked out automatically the moment an assignment is marked
+     "Done — paid" with an amount, and the rate used is stored on the
+     assignment so later rate changes never rewrite history.
+   - Anything paid out to Jafter is logged as a payout and comes off his balance. */
+
+function shareForStudent(student, rate){
+  const usd = Number(student.jafterShareUsd) || 0;
+  if(studentCurrency(student)==='USD') return { share: round2(usd), shareUsd: round2(usd), rate: null };
+  const r = rate || exchangeRate;
+  return { share: round2(usd / r), shareUsd: round2(usd), rate: r };
+}
+function isPaidWithAmount(a){ return a.status==='done_paid' && (Number(a.paid)||0) > 0; }
+
+// Lock in (or clear) the share stored on one assignment. Call after any status or amount change.
+function syncShare(a, student){
+  if(isPaidWithAmount(a)){
+    if(typeof a.share !== 'number'){
+      const s = shareForStudent(student);
+      a.share = s.share; a.shareUsd = s.shareUsd; a.shareRate = s.rate; a.shareAt = Date.now();
+    }
+  } else {
+    delete a.share; delete a.shareUsd; delete a.shareRate; delete a.shareAt;
+  }
+}
+
+// The share for one assignment: the locked-in figure if it has one, otherwise what it would be at today's rate.
+function assignmentShare(a, student){
+  if(!isPaidWithAmount(a)) return 0;
+  if(typeof a.share === 'number') return a.share;
+  return shareForStudent(student).share;
+}
+
+function buildLedger(){
+  const byCurrency = {};
+  CURRENCY_LIST.forEach(c=> byCurrency[c] = { paid:0, jafterShare:0, yourShare:0, outstanding:0, paidOut:0, jafterBalance:0, paidCount:0 });
+  const perStudent = [];
+  let unlockedCount = 0;
+
+  students.forEach(s=>{
+    const c = studentCurrency(s);
+    const row = { id:s.id, name:s.name, currency:c, paid:0, jafterShare:0, yourShare:0, outstanding:0, paidCount:0 };
+    (studentCourses[s.id]||[]).forEach(course=>course.modules.forEach(m=>m.assignments.forEach(a=>{
+      if(a.status==='done_paid'){
+        row.paid += Number(a.paid)||0;
+        if(isPaidWithAmount(a)){
+          row.jafterShare += assignmentShare(a, s);
+          row.paidCount++;
+          if(typeof a.share !== 'number') unlockedCount++;
+        }
+      } else if(a.status==='done_unpaid'){
+        row.outstanding += Number(a.due)||0;
+      }
+    })));
+    row.paid = round2(row.paid); row.jafterShare = round2(row.jafterShare); row.outstanding = round2(row.outstanding);
+    row.yourShare = round2(row.paid - row.jafterShare);
+    perStudent.push(row);
+    const t = byCurrency[c];
+    t.paid += row.paid; t.jafterShare += row.jafterShare; t.outstanding += row.outstanding; t.paidCount += row.paidCount;
+  });
+
+  payouts.forEach(p=>{
+    const c = CURRENCIES[p.currency] ? p.currency : 'GBP';
+    byCurrency[c].paidOut += Number(p.amount)||0;
+  });
+
+  CURRENCY_LIST.forEach(c=>{
+    const t = byCurrency[c];
+    t.paid = round2(t.paid); t.jafterShare = round2(t.jafterShare); t.outstanding = round2(t.outstanding); t.paidOut = round2(t.paidOut);
+    t.yourShare = round2(t.paid - t.jafterShare);
+    t.jafterBalance = round2(t.jafterShare - t.paidOut);
+  });
+  const jafterUsdEquivalent = round2(byCurrency.USD.jafterBalance + byCurrency.GBP.jafterBalance * exchangeRate);
+  return { byCurrency, perStudent, unlockedCount, jafterUsdEquivalent };
+}
+
 /* ===================== REPORTING HELPERS =====================
    Note: completedAt / paidAt timestamps only exist on assignments marked
    done AFTER this feature was added. Older records marked done before
@@ -591,7 +715,7 @@ function allAssignmentsFlat(){
     (studentCourses[s.id]||[]).forEach(c=>{
       c.modules.forEach(m=>{
         m.assignments.forEach(a=>{
-          rows.push(Object.assign({}, a, { studentId:s.id, studentName:s.name, courseTitle:c.title, moduleName:m.name }));
+          rows.push(Object.assign({}, a, { studentId:s.id, studentName:s.name, currency:studentCurrency(s), courseTitle:c.title, moduleName:m.name }));
         });
       });
     });
@@ -601,18 +725,19 @@ function allAssignmentsFlat(){
 
 // Total currently owed (done_unpaid) across all students, plus a per-student breakdown — this is a live snapshot, not period-based
 function globalOwed(){
-  let total = 0;
+  const totals = emptyTotals();   // owed, kept separately per currency
   const byStudent = [];
   students.forEach(s=>{
+    const cur = studentCurrency(s);
     let owed = 0;
     (studentCourses[s.id]||[]).forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
       if(a.status==='done_unpaid') owed += Number(a.due)||0;
     })));
-    if(owed>0) byStudent.push({ id:s.id, name:s.name, amount:owed });
-    total += owed;
+    if(owed>0) byStudent.push({ id:s.id, name:s.name, amount:owed, currency:cur });
+    totals[cur] += owed;
   });
-  byStudent.sort((a,b)=>b.amount-a.amount);
-  return { total, byStudent };
+  byStudent.sort((a,b)=> (a.currency===b.currency ? b.amount-a.amount : a.currency.localeCompare(b.currency)));
+  return { totals, byStudent };
 }
 
 // How many assignments were newly completed (any done_* status) since a given timestamp
@@ -626,23 +751,26 @@ function reportForPeriod(period){
   const rows = allAssignmentsFlat();
   const completed = rows.filter(a=>a.completedAt && a.completedAt>=since);
   const paidRows = rows.filter(a=>a.status==='done_paid' && a.paidAt && a.paidAt>=since);
-  const totalPaid = paidRows.reduce((s,a)=>s+(Number(a.paid)||0),0);
+  const totalPaid = emptyTotals();   // collected in the period, per currency
+  paidRows.forEach(a=>{ totalPaid[a.currency] += Number(a.paid)||0; });
   const byStudent = {};
   completed.forEach(a=>{
-    if(!byStudent[a.studentId]) byStudent[a.studentId] = { name:a.studentName, completed:0, paid:0 };
+    if(!byStudent[a.studentId]) byStudent[a.studentId] = { name:a.studentName, currency:a.currency, completed:0, paid:0 };
     byStudent[a.studentId].completed++;
   });
   paidRows.forEach(a=>{
-    if(!byStudent[a.studentId]) byStudent[a.studentId] = { name:a.studentName, completed:0, paid:0 };
+    if(!byStudent[a.studentId]) byStudent[a.studentId] = { name:a.studentName, currency:a.currency, completed:0, paid:0 };
     byStudent[a.studentId].paid += Number(a.paid)||0;
   });
-  const list = Object.values(byStudent).sort((a,b)=> b.paid-a.paid || b.completed-a.completed);
+  const list = Object.values(byStudent).sort((a,b)=> b.completed-a.completed || b.paid-a.paid);
   return { completedCount: completed.length, totalPaid, byStudent: list };
 }
 
 /* ===================== RENDER ===================== */
 
 function el(html){ const d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstElementChild; }
+// Two-line display of a {GBP, USD} pair, so the pound and dollar figures always sit side by side
+function pairInner(t){ return `<div>${money(t.GBP,'GBP')}</div><div>${money(t.USD,'USD')}</div>`; }
 
 function render(){
   const app = document.getElementById('app');
@@ -674,6 +802,7 @@ function render(){
   else if(view.screen==='trash') app.appendChild(renderTrash());
   else if(view.screen==='reports') app.appendChild(renderReports());
   else if(view.screen==='activity') app.appendChild(renderActivity());
+  else if(view.screen==='balance') app.appendChild(renderBalance());
   app.appendChild(el(`<div class="footer-note">THE LEDGER — a quiet place to track modules, assignments &amp; what's been paid</div>`));
 }
 
@@ -756,12 +885,15 @@ function renderProfiles(){
   </div>`));
 
   const owed = globalOwed();
+  const ledger = buildLedger();
   const weekCompleted = completedSince(startOfWeek());
+  const jb = { GBP: ledger.byCurrency.GBP.jafterBalance, USD: ledger.byCurrency.USD.jafterBalance };
   const summaryCard = el(`<div class="card">
     <div class="stat-row">
       <div class="stat"><div class="num">${students.length}</div><div class="lbl">Active students</div></div>
       <div class="stat"><div class="num">${weekCompleted}</div><div class="lbl">Assignments done this week</div></div>
-      <div class="stat"><div class="num" style="color:var(--rust)">${money(owed.total)}</div><div class="lbl">Total owed</div></div>
+      <div class="stat"><div class="num dual" style="color:var(--rust)">${pairInner(owed.totals)}</div><div class="lbl">Total owed</div></div>
+      <div class="stat"><div class="num dual" style="color:var(--moss-deep)">${pairInner(jb)}</div><div class="lbl">Jafter's balance</div></div>
     </div>
   </div>`);
   if(owed.byStudent.length>0){
@@ -769,12 +901,15 @@ function renderProfiles(){
     owedList.appendChild(el(`<div class="grouptitle" style="margin-bottom:8px;">Who owes what</div>`));
     owed.byStudent.forEach(o=>{
       owedList.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:5px 0;">
-        <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount)}</span>
+        <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount, o.currency)}</span>
       </div>`));
     });
     summaryCard.appendChild(owedList);
   }
-  const reportsBtn = el(`<button class="ghost" style="margin-top:14px;">📊 View reports</button>`);
+  const balanceBtn = el(`<button class="moss" style="margin-top:14px;">⚖ Balance sheet</button>`);
+  balanceBtn.onclick = ()=>{ view = { screen:'balance', courseIdx:null, addingCourse:false, openModules:{} }; render(); };
+  summaryCard.appendChild(balanceBtn);
+  const reportsBtn = el(`<button class="ghost" style="margin-top:14px; margin-left:10px;">📊 View reports</button>`);
   reportsBtn.onclick = ()=>{ view = { screen:'reports', courseIdx:null, addingCourse:false, openModules:{}, reportPeriod:'week' }; render(); };
   summaryCard.appendChild(reportsBtn);
   const activityBtn = el(`<button class="ghost" style="margin-top:14px; margin-left:10px;">🕒 Activity log</button>`);
@@ -792,7 +927,7 @@ function renderProfiles(){
       const tile = el(`<div class="profile-tile">
         <div class="avatar">${initials}</div>
         <div class="pname">${escapeHtml(s.name)}</div>
-        <div class="pmeta">${(studentCourses[s.id]||[]).length} course(s)</div>
+        <div class="pmeta">${(studentCourses[s.id]||[]).length} course(s) · ${studentCurrency(s)}</div>
         <div class="tile-actions"></div>
       </div>`);
       tile.addEventListener('click', ()=>{
@@ -842,6 +977,8 @@ function openEditStudentModal(s){
     <h3>Edit student details</h3>
     <div class="field"><label>Full name</label><input id="editName" value="${escapeHtml(s.name)}" /></div>
     <div class="field"><label>Note (optional)</label><input id="editNote" value="${escapeHtml(s.note||'')}" /></div>
+    ${moneyFieldsHtml(s)}
+    <div class="muted" style="margin-bottom:12px; font-size:11.5px;">Changing the share only affects assignments marked paid from now on. Shares already locked in on earlier paid assignments keep the figure they were given.</div>
     <div class="row">
       <button class="ghost" id="cancelEdit">Cancel</button>
       <button class="moss" id="confirmEdit">Save changes</button>
@@ -855,10 +992,21 @@ function openEditStudentModal(s){
     const name = modal.querySelector('#editName').value.trim();
     if(!name){ toast('Name can\'t be empty'); return; }
     const note = modal.querySelector('#editNote').value.trim();
+    const mf = readMoneyFields(modal);
+    if(!mf) return;
+    const hasAmounts = (studentCourses[s.id]||[]).some(c=>c.modules.some(m=>m.assignments.some(a=>(Number(a.paid)||0)>0 || (Number(a.due)||0)>0)));
+    if(mf.currency !== studentCurrency(s) && hasAmounts){
+      if(!confirm(`${s.name} already has amounts recorded in ${studentCurrency(s)}. Switching to ${mf.currency} does NOT convert them — the same numbers will just be shown in ${mf.currency}. Only do this if they were actually entered in ${mf.currency}. Continue?`)) return;
+    }
     try{
-      await db.collection('students').doc(s.id).update({ name, note });
+      await db.collection('students').doc(s.id).update({ name, note, currency:mf.currency, jafterShareUsd:mf.jafterShareUsd, defaultPrice:mf.defaultPrice });
       bg.remove();
-      logActivity('Edited student details', s.name!==name ? `Renamed from "${s.name}" to "${name}"` : 'Updated note', name);
+      const changes = [];
+      if(s.name!==name) changes.push(`Renamed from "${s.name}" to "${name}"`);
+      if(mf.currency!==studentCurrency(s)) changes.push(`Currency ${studentCurrency(s)} → ${mf.currency}`);
+      if(mf.jafterShareUsd!==s.jafterShareUsd) changes.push(`Jafter's share $${s.jafterShareUsd} → $${mf.jafterShareUsd}`);
+      if(mf.defaultPrice!==s.defaultPrice) changes.push('Price per assignment changed');
+      logActivity('Edited student details', changes.length ? changes.join(' · ') : 'Updated note', name);
       toast('Details updated for '+name);
     }catch(e){
       console.error('edit student failed', e);
@@ -981,7 +1129,7 @@ function renderReports(){
   const report = reportForPeriod(period);
   periodCard.appendChild(el(`<div class="stat-row" style="margin-top:16px;">
     <div class="stat"><div class="num">${report.completedCount}</div><div class="lbl">Assignments completed</div></div>
-    <div class="stat"><div class="num">${money(report.totalPaid)}</div><div class="lbl">Money collected</div></div>
+    <div class="stat"><div class="num dual">${pairInner(report.totalPaid)}</div><div class="lbl">Money collected</div></div>
   </div>`));
   wrap.appendChild(periodCard);
 
@@ -992,7 +1140,7 @@ function renderReports(){
     report.byStudent.forEach(row=>{
       byStudentCard.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:8px 0; border-top:1px dashed var(--line);">
         <span><strong>${escapeHtml(row.name)}</strong> — ${row.completed} assignment${row.completed===1?'':'s'} completed</span>
-        <span style="color:var(--gold); font-family:'IBM Plex Mono',monospace;">${money(row.paid)}</span>
+        <span style="color:var(--gold); font-family:'IBM Plex Mono',monospace;">${money(row.paid, row.currency)}</span>
       </div>`));
     });
   }
@@ -1005,11 +1153,201 @@ function renderReports(){
   } else {
     owed.byStudent.forEach(o=>{
       owedCard.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:8px 0; border-top:1px dashed var(--line);">
-        <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount)}</span>
+        <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount, o.currency)}</span>
       </div>`));
     });
   }
   wrap.appendChild(owedCard);
+
+  return wrap;
+}
+
+/* ===================== BALANCE SHEET ===================== */
+
+async function saveExchangeRate(value){
+  try{
+    await db.collection('settings').doc('app').set({ usdPerGbp: value, updatedBy: currentUser.email, updatedAt: Date.now() }, { merge:true });
+    logActivity('Changed exchange rate', `1 GBP = ${value} USD. Shares already locked in keep the rate they were given.`, null);
+    toast('Exchange rate saved');
+  }catch(e){
+    console.error('save rate failed', e);
+    toast('⚠ Could not save the rate — check your connection and permissions');
+  }
+}
+
+async function addPayout(amount, currency, dateTs, note){
+  try{
+    await db.collection('payouts').add({ amount, currency, date: dateTs, note: note || '', byEmail: currentUser.email, createdAt: Date.now() });
+    logActivity('Paid out to Jafter', `${money(amount, currency)}${note ? ' — '+note : ''}`, null);
+    toast('Payout recorded');
+  }catch(e){
+    console.error('add payout failed', e);
+    toast('⚠ Could not record the payout — check your connection and permissions');
+  }
+}
+
+async function deletePayout(p){
+  if(!confirm(`Delete this payout of ${money(p.amount, p.currency)} on ${new Date(p.date).toLocaleDateString()}? Jafter's balance will go back up by that amount.`)) return;
+  try{
+    await db.collection('payouts').doc(p.id).delete();
+    logActivity('Deleted a payout to Jafter', `${money(p.amount, p.currency)} on ${new Date(p.date).toLocaleDateString()}${p.note ? ' — '+p.note : ''}`, null);
+    toast('Payout deleted');
+  }catch(e){
+    console.error('delete payout failed', e);
+    toast('⚠ Could not delete — check your connection and permissions');
+  }
+}
+
+// Paid assignments that predate the share feature get their share fixed at today's rate
+async function lockInShares(count){
+  if(!confirm(`Lock in Jafter's share on ${count} paid assignment${count===1?'':'s'} that don't have one stored yet, using today's rate of 1 GBP = ${exchangeRate} USD? After this, later rate changes won't alter them.`)) return;
+  const changed = new Set();
+  students.forEach(s=>{
+    (studentCourses[s.id]||[]).forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
+      if(isPaidWithAmount(a) && typeof a.share !== 'number'){ syncShare(a, s); changed.add(s.id); }
+    })));
+  });
+  for(const id of changed){ await saveCourses(id); }
+  logActivity('Locked in Jafter\'s share on existing paid assignments', `${count} assignment${count===1?'':'s'} at 1 GBP = ${exchangeRate} USD`, null);
+  toast('Shares locked in');
+  render();
+}
+
+function sheetRow(label, value, opts={}){
+  const color = opts.color ? `color:${opts.color};` : '';
+  const weight = opts.bold ? 'font-weight:700;' : '';
+  const border = opts.top ? 'border-top:1px solid var(--ink-soft); margin-top:4px;' : 'border-top:1px dashed var(--line);';
+  return `<div class="elective-opt" style="justify-content:space-between; padding:9px 0; ${border}">
+    <span style="${weight}">${label}${opts.hint ? `<span class="muted" style="display:block; font-size:11.5px; font-weight:400;">${opts.hint}</span>` : ''}</span>
+    <span style="font-family:'IBM Plex Mono',monospace; ${color} ${weight}">${value}</span>
+  </div>`;
+}
+
+function renderBalance(){
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Back to students</button>`);
+  back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  const L = buildLedger();
+  const G = L.byCurrency.GBP, U = L.byCurrency.USD;
+
+  wrap.appendChild(el(`<div class="card">
+    <h2>Balance sheet</h2>
+    <div class="muted">Pounds and dollars are kept apart. Every paid assignment is split automatically: Jafter gets his set USD share (converted to pounds for students who pay in pounds) and the rest is yours.</div>
+  </div>`));
+
+  // Exchange rate
+  const rateCard = el(`<div class="card" ${rateIsSet ? '' : 'style="border-left:4px solid var(--rust);"'}>
+    <h2>Exchange rate</h2>
+    <div class="muted" style="margin-bottom:10px;">${rateIsSet ? 'Used to turn Jafter\'s USD share into pounds for students who pay in pounds, and to show his total in dollars.' : '<strong>No rate saved yet.</strong> The app is using a placeholder of 1.30 — please enter the real rate, because it decides how much of each pound payment goes to Jafter.'}</div>
+    <div class="row" style="align-items:flex-end;">
+      <div class="field" style="margin:0;"><label>1 GBP =</label><input id="rateInput" type="number" min="0.0001" step="0.0001" value="${exchangeRate}" /></div>
+      <div style="flex:0 0 auto;"><span class="muted" style="margin-right:10px;">USD</span></div>
+    </div>
+  </div>`);
+  const saveRateBtn = lockIfReadOnly(el(`<button class="moss" style="margin-top:12px;">Save rate</button>`));
+  saveRateBtn.onclick = ()=>{
+    const v = Number(rateCard.querySelector('#rateInput').value);
+    if(!(v > 0)){ toast('Enter a rate above zero'); return; }
+    saveExchangeRate(v);
+  };
+  rateCard.appendChild(saveRateBtn);
+  wrap.appendChild(rateCard);
+
+  if(L.unlockedCount > 0){
+    const lockCard = el(`<div class="card" style="border-left:4px solid var(--gold);">
+      <div class="muted">${L.unlockedCount} paid assignment${L.unlockedCount===1?'':'s'} ${L.unlockedCount===1?'was':'were'} marked paid before shares were tracked. ${L.unlockedCount===1?'It is':'They are'} counted below at today's rate, which means ${L.unlockedCount===1?'it':'they'} would shift if you change the rate. Lock ${L.unlockedCount===1?'it':'them'} in to fix the figures.</div>
+    </div>`);
+    const lockBtn = lockIfReadOnly(el(`<button class="ghost" style="margin-top:10px;">Lock in shares at today's rate</button>`));
+    lockBtn.onclick = ()=> lockInShares(L.unlockedCount);
+    lockCard.appendChild(lockBtn);
+    wrap.appendChild(lockCard);
+  }
+
+  // Jafter's balance, headline
+  const jOwedGbp = G.jafterBalance, jOwedUsd = U.jafterBalance;
+  wrap.appendChild(el(`<div class="card">
+    <h2>Jafter's balance</h2>
+    <div class="muted">What he has earned minus what you have already paid him.</div>
+    <div class="stat-row">
+      <div class="stat"><div class="num" style="color:${jOwedGbp<0?'var(--rust)':'var(--moss-deep)'}">${money(jOwedGbp,'GBP')}</div><div class="lbl">Owed in pounds</div></div>
+      <div class="stat"><div class="num" style="color:${jOwedUsd<0?'var(--rust)':'var(--moss-deep)'}">${money(jOwedUsd,'USD')}</div><div class="lbl">Owed in dollars</div></div>
+      <div class="stat"><div class="num">${money(L.jafterUsdEquivalent,'USD')}</div><div class="lbl">Total in USD at ${exchangeRate}</div></div>
+    </div>
+    ${(jOwedGbp<0 || jOwedUsd<0) ? `<div class="muted" style="margin-top:10px; color:var(--rust);">A negative balance means more has been paid out than he has earned in that currency.</div>` : ''}
+  </div>`));
+
+  // One sheet per currency
+  CURRENCY_LIST.forEach(c=>{
+    const t = L.byCurrency[c];
+    const card = el(`<div class="card"><h2>${CURRENCIES[c].name} (${c})</h2>
+      <div class="muted">${t.paidCount} paid assignment${t.paidCount===1?'':'s'} in ${c}</div>
+      ${sheetRow('Money collected', money(t.paid,c), {bold:true})}
+      ${sheetRow('Jafter\'s share earned', '− '+money(t.jafterShare,c), {hint: c==='USD' ? 'His set USD amount per paid assignment' : 'His USD amount converted at the rate stored on each assignment'})}
+      ${sheetRow('Your share', money(t.yourShare,c), {bold:true, top:true, color:'var(--moss-deep)'})}
+      ${sheetRow('Paid out to Jafter so far', money(t.paidOut,c))}
+      ${sheetRow('Still owed to Jafter', money(t.jafterBalance,c), {bold:true, color: t.jafterBalance<0 ? 'var(--rust)' : 'var(--moss-deep)'})}
+      ${sheetRow('Owed by students, not yet collected', money(t.outstanding,c), {color:'var(--rust)', hint:'Not counted in anything above until it is paid'})}
+    </div>`);
+    wrap.appendChild(card);
+  });
+
+  // Payouts
+  const payCard = el(`<div class="card">
+    <h2>Payouts to Jafter</h2>
+    <div class="muted" style="margin-bottom:12px;">Record each time you pay him. It comes straight off his balance in that currency.</div>
+    <div class="row" style="align-items:flex-end;">
+      <div class="field" style="margin:0;"><label>Amount</label><input id="payAmount" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+      <div class="field" style="margin:0;"><label>Currency</label><select id="payCur">${CURRENCY_LIST.map(c=>`<option value="${c}">${CURRENCIES[c].symbol} ${c}</option>`).join('')}</select></div>
+      <div class="field" style="margin:0;"><label>Date</label><input id="payDate" type="date" value="${toDateInputValue(Date.now())}" /></div>
+    </div>
+    <div class="field" style="margin:12px 0 0;"><label>Note (optional)</label><input id="payNote" placeholder="e.g. EcoCash, bank transfer, cash" /></div>
+  </div>`);
+  const addPayBtn = lockIfReadOnly(el(`<button class="moss" style="margin-top:12px;">Record payout</button>`));
+  addPayBtn.onclick = async ()=>{
+    const amount = Number(payCard.querySelector('#payAmount').value);
+    const currency = payCard.querySelector('#payCur').value;
+    const dateVal = payCard.querySelector('#payDate').value;
+    const note = payCard.querySelector('#payNote').value.trim();
+    if(!(amount > 0)){ toast('Enter an amount above zero'); return; }
+    if(!dateVal){ toast('Pick a date'); return; }
+    await addPayout(round2(amount), currency, fromDateInputValue(dateVal), note);
+  };
+  payCard.appendChild(addPayBtn);
+  if(payouts.length===0){
+    payCard.appendChild(el(`<div class="muted" style="margin-top:14px;">No payouts recorded yet.</div>`));
+  } else {
+    const list = el(`<div style="margin-top:14px;"></div>`);
+    payouts.forEach(p=>{
+      const row = el(`<div class="elective-opt" style="justify-content:space-between; padding:9px 0; border-top:1px dashed var(--line);">
+        <span>${new Date(p.date).toLocaleDateString()}${p.note ? ' · '+escapeHtml(p.note) : ''}<span class="muted" style="display:block; font-size:11.5px;">recorded by ${escapeHtml(p.byEmail||'unknown')}</span></span>
+        <span style="display:flex; align-items:center; gap:10px;"><span style="font-family:'IBM Plex Mono',monospace;">${money(p.amount, p.currency)}</span></span>
+      </div>`);
+      const del = lockIfReadOnly(el(`<button class="subtle" style="font-size:11px;">Delete</button>`));
+      del.onclick = ()=> deletePayout(p);
+      row.lastElementChild.appendChild(del);
+      list.appendChild(row);
+    });
+    payCard.appendChild(list);
+  }
+  wrap.appendChild(payCard);
+
+  // Per student
+  const stuCard = el(`<div class="card"><h2>By student</h2><div class="muted">All-time, in each student's own currency.</div></div>`);
+  if(L.perStudent.length===0){
+    stuCard.appendChild(el(`<div class="empty" style="padding:24px;">No students yet.</div>`));
+  } else {
+    L.perStudent.slice().sort((a,b)=> a.currency.localeCompare(b.currency) || b.paid-a.paid).forEach(r=>{
+      stuCard.appendChild(el(`<div style="padding:10px 0; border-top:1px dashed var(--line);">
+        <div style="display:flex; justify-content:space-between;"><strong>${escapeHtml(r.name)}</strong><span class="pill locked">${r.currency}</span></div>
+        <div class="muted" style="font-family:'IBM Plex Mono',monospace; font-size:12px; margin-top:4px;">
+          collected ${money(r.paid,r.currency)} · Jafter ${money(r.jafterShare,r.currency)} · you ${money(r.yourShare,r.currency)}${r.outstanding>0 ? ` · <span style="color:var(--rust)">owes ${money(r.outstanding,r.currency)}</span>` : ''}
+        </div>
+      </div>`));
+    });
+  }
+  wrap.appendChild(stuCard);
 
   return wrap;
 }
@@ -1042,12 +1380,42 @@ function renderActivity(){
   return wrap;
 }
 
+// The currency / Jafter's share / default price fields shared by the add and edit student forms
+function moneyFieldsHtml(s){
+  return `
+    <div class="row">
+      <div class="field"><label>Pays in</label>
+        <select id="mfCurrency">
+          ${CURRENCY_LIST.map(c=>`<option value="${c}" ${studentCurrency(s)===c?'selected':''}>${CURRENCIES[c].symbol} ${CURRENCIES[c].name} (${c})</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Price per assignment (optional)</label>
+        <input id="mfPrice" type="number" min="0" step="0.01" placeholder="e.g. 80" value="${s.defaultPrice ?? ''}" />
+      </div>
+    </div>
+    <div class="field"><label>Jafter's share per paid assignment (in USD)</label>
+      <input id="mfShare" type="number" min="0" step="0.01" value="${s.jafterShareUsd ?? DEFAULT_SHARE_USD}" />
+      <div class="muted" style="margin-top:4px; font-size:11.5px;">If this student pays in pounds, the share is converted to pounds at the exchange rate on the Balance sheet.</div>
+    </div>`;
+}
+function readMoneyFields(root){
+  const currency = root.querySelector('#mfCurrency').value;
+  const shareRaw = root.querySelector('#mfShare').value;
+  const priceRaw = root.querySelector('#mfPrice').value;
+  const jafterShareUsd = shareRaw === '' ? DEFAULT_SHARE_USD : Number(shareRaw);
+  if(!(jafterShareUsd >= 0)){ toast('Jafter\'s share must be 0 or more'); return null; }
+  const defaultPrice = priceRaw === '' ? null : Number(priceRaw);
+  if(defaultPrice !== null && !(defaultPrice >= 0)){ toast('Price must be 0 or more'); return null; }
+  return { currency, jafterShareUsd, defaultPrice };
+}
+
 function openAddStudentModal(){
   const bg = el(`<div class="modal-bg"></div>`);
   const modal = el(`<div class="modal">
     <h3>New student account</h3>
     <div class="field"><label>Full name</label><input id="newName" placeholder="e.g. Amara Okafor" /></div>
     <div class="field"><label>Note (optional)</label><input id="newNote" placeholder="cohort, ID number, etc." /></div>
+    ${moneyFieldsHtml({ currency:'GBP', jafterShareUsd:DEFAULT_SHARE_USD, defaultPrice:null })}
     <div class="row">
       <button class="ghost" id="cancelAdd">Cancel</button>
       <button class="moss" id="confirmAdd">Create account</button>
@@ -1061,11 +1429,13 @@ function openAddStudentModal(){
     const name = modal.querySelector('#newName').value.trim();
     if(!name){ toast('Please enter a name'); return; }
     const note = modal.querySelector('#newNote').value.trim();
+    const money_ = readMoneyFields(modal);
+    if(!money_) return;
     const id = uid();
     try{
-      await db.collection('students').doc(id).set({ name, note, createdAt: Date.now(), courses: [] });
+      await db.collection('students').doc(id).set({ name, note, createdAt: Date.now(), courses: [], currency:money_.currency, jafterShareUsd:money_.jafterShareUsd, defaultPrice:money_.defaultPrice });
       bg.remove();
-      logActivity('Added new student', '', name);
+      logActivity('Added new student', `Bills in ${money_.currency} · Jafter's share $${money_.jafterShareUsd} per paid assignment`, name);
       toast('Account created for '+name);
     }catch(e){
       console.error('create student failed', e);
@@ -1083,23 +1453,26 @@ function renderDashboard(){
   const courses = studentCourses[currentStudentId] || [];
   const wrap = el(`<div></div>`);
 
+  const cur = studentCurrency(student);
   const totalPaid = courses.reduce((s,c)=>s+coursePaidTotal(c),0);
   const totalOutstanding = courses.reduce((s,c)=>s+courseOutstanding(c),0);
   const totalAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.length,0),0);
   const doneAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.filter(isAssignmentDone).length,0),0);
+  const jafterShareTotal = round2(courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.reduce((y,a)=>y+assignmentShare(a,student),0),0),0));
 
   const headerCard = el(`<div class="card">
     <div class="course-head">
       <div class="titles">
         <h2>${escapeHtml(student.name)}</h2>
-        <div class="muted">${student.note ? escapeHtml(student.note) : 'Student overview'}</div>
+        <div class="muted">${student.note ? escapeHtml(student.note)+' · ' : ''}Pays in ${cur} · Jafter's share $${student.jafterShareUsd} per paid assignment</div>
       </div>
     </div>
     <div class="stat-row">
       <div class="stat"><div class="num">${courses.length}</div><div class="lbl">Courses</div></div>
       <div class="stat"><div class="num">${doneAssignments}/${totalAssignments}</div><div class="lbl">Assignments done</div></div>
-      <div class="stat"><div class="num">${money(totalPaid)}</div><div class="lbl">Total paid</div></div>
-      <div class="stat"><div class="num" style="color:var(--rust)">${money(totalOutstanding)}</div><div class="lbl">Outstanding</div></div>
+      <div class="stat"><div class="num">${money(totalPaid, cur)}</div><div class="lbl">Total paid</div></div>
+      <div class="stat"><div class="num" style="color:var(--rust)">${money(totalOutstanding, cur)}</div><div class="lbl">Outstanding</div></div>
+      <div class="stat"><div class="num" style="color:var(--moss-deep)">${money(jafterShareTotal, cur)}</div><div class="lbl">Jafter's share</div></div>
     </div>
   </div>`);
   const headerActions = el(`<div class="row" style="margin-top:12px;"></div>`);
@@ -1135,7 +1508,7 @@ function renderDashboard(){
           <span class="pill ${complete?'done':'progress'}">${complete? 'Complete' : prog+'% done'}</span>
         </div>
         <div class="row" style="margin-top:14px;">
-          <div class="muted">Paid so far: <strong style="color:var(--gold)">${money(coursePaidTotal(course))}</strong>${courseOutstanding(course)>0 ? ` &nbsp;·&nbsp; Outstanding: <strong style="color:var(--rust)">${money(courseOutstanding(course))}</strong>` : ''}</div>
+          <div class="muted">Paid so far: <strong style="color:var(--gold)">${money(coursePaidTotal(course), cur)}</strong>${courseOutstanding(course)>0 ? ` &nbsp;·&nbsp; Outstanding: <strong style="color:var(--rust)">${money(courseOutstanding(course), cur)}</strong>` : ''}</div>
         </div>
       </div>`);
       card.querySelector('.course-head').addEventListener('click', ()=>{
@@ -1156,6 +1529,8 @@ function renderCourse(){
   if(view.addingCourse) return renderAddCourse();
   const courses = studentCourses[currentStudentId] || [];
   const course = courses[view.courseIdx];
+  const student = students.find(s=>s.id===currentStudentId);
+  const cur = studentCurrency(student);
   const wrap = el(`<div></div>`);
   const back = el(`<button class="back">← Back to dashboard</button>`);
   back.onclick = ()=>{ view={screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
@@ -1174,8 +1549,8 @@ function renderCourse(){
     <div class="stat-row">
       <div class="stat"><div class="num">${course.modules.length}</div><div class="lbl">Modules</div></div>
       <div class="stat"><div class="num">${course.modules.reduce((s,m)=>s+m.assignments.filter(isAssignmentDone).length,0)}/${course.modules.reduce((s,m)=>s+m.assignments.length,0)}</div><div class="lbl">Assignments done</div></div>
-      <div class="stat"><div class="num">${money(coursePaidTotal(course))}</div><div class="lbl">Paid so far</div></div>
-      <div class="stat"><div class="num" style="color:var(--rust)">${money(courseOutstanding(course))}</div><div class="lbl">Outstanding</div></div>
+      <div class="stat"><div class="num">${money(coursePaidTotal(course), cur)}</div><div class="lbl">Paid so far</div></div>
+      <div class="stat"><div class="num" style="color:var(--rust)">${money(courseOutstanding(course), cur)}</div><div class="lbl">Outstanding</div></div>
     </div>
   </div>`);
   wrap.appendChild(head);
@@ -1232,16 +1607,20 @@ function renderCourse(){
             // clicking the already-active state clears it back to "not started"
             const newStatus = (a.status===opt.key) ? 'not_started' : opt.key;
             a.status = newStatus;
-            if(newStatus==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? null;
+            // Pre-fill the amount from the student's price per assignment, if one is set
+            if(newStatus==='done_unpaid' && (a.due===null || a.due===undefined) && student.defaultPrice) a.due = student.defaultPrice;
+            if(newStatus==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? student.defaultPrice ?? null;
             if(newStatus==='not_started'){
               a.paid = null; a.due = null; a.completedAt = null; a.paidAt = null;
             } else {
               if(!a.completedAt) a.completedAt = Date.now();
               if(newStatus==='done_paid') a.paidAt = Date.now();
             }
+            syncShare(a, student);   // locks in Jafter's share automatically when paid with an amount, clears it otherwise
             saveCourses(currentStudentId);
             const statusLabels = { not_started:'Not done', done_unpaid:'Done — not yet paid', done_paid:'Done — paid', done_self:'Done independently' };
-            logActivity('Marked assignment: '+statusLabels[newStatus], `${m.name} — ${a.label}`, currentStudentName());
+            const shareNote = typeof a.share === 'number' ? ` · Jafter's share ${money(a.share, cur)}` : '';
+            logActivity('Marked assignment: '+statusLabels[newStatus], `${m.name} — ${a.label}${shareNote}`, currentStudentName());
             render();
           });
           seg.appendChild(btn);
@@ -1270,7 +1649,7 @@ function renderCourse(){
           dueInput.addEventListener('change', async ()=>{
             a.due = dueInput.value === '' ? 0 : Number(dueInput.value);
             saveCourses(currentStudentId);
-            logActivity('Updated amount due', `${m.name} — ${a.label} → ${money(a.due)}`, currentStudentName());
+            logActivity('Updated amount due', `${m.name} — ${a.label} → ${money(a.due, cur)}`, currentStudentName());
             render();
           });
           dueWrap.appendChild(dueInput);
@@ -1281,12 +1660,20 @@ function renderCourse(){
           payInput.value = a.paid ?? '';
           payInput.addEventListener('change', async ()=>{
             a.paid = payInput.value === '' ? 0 : Number(payInput.value);
+            syncShare(a, student);   // an amount above zero locks in the share; zero clears it
             saveCourses(currentStudentId);
-            logActivity('Updated amount paid', `${m.name} — ${a.label} → ${money(a.paid)}`, currentStudentName());
+            const shareNote = typeof a.share === 'number' ? ` · Jafter's share ${money(a.share, cur)}` : '';
+            logActivity('Updated amount paid', `${m.name} — ${a.label} → ${money(a.paid, cur)}${shareNote}`, currentStudentName());
             render();
           });
           payWrap.appendChild(payInput);
           row.appendChild(payWrap);
+
+          if(isPaidWithAmount(a)){
+            const sh = assignmentShare(a, student);
+            const how = cur==='USD' ? '' : ` ($${typeof a.shareUsd==='number' ? a.shareUsd : student.jafterShareUsd} at ${typeof a.shareRate==='number' ? a.shareRate : exchangeRate})`;
+            row.appendChild(el(`<div class="share-note">Jafter's share ${money(sh, cur)}${how} · yours ${money(round2((Number(a.paid)||0) - sh), cur)}</div>`));
+          }
 
           const paidDateWrap = el(`<div class="adate"><span>paid on</span></div>`);
           const paidDateInput = lockIfReadOnly(el(`<input type="date" />`));
@@ -1563,7 +1950,12 @@ function init(){
       view = { screen:'profiles', courseIdx:null, addingCourse:false, openModules:{} };
       attachStudentsListener();
       attachActivityListener();
+      attachSettingsListener();
+      attachPayoutsListener();
     } else {
+      if(settingsUnsub){ settingsUnsub(); settingsUnsub=null; }
+      if(payoutsUnsub){ payoutsUnsub(); payoutsUnsub=null; }
+      payouts = []; exchangeRate = DEFAULT_RATE; rateIsSet = false;
       if(studentsUnsub){ studentsUnsub(); studentsUnsub=null; }
       if(activityUnsub){ activityUnsub(); activityUnsub=null; }
       students = []; studentCourses = {}; currentStudentId = null; dataReady = false; activityLog = [];

@@ -162,6 +162,9 @@
   .self-note{width:100%; text-align:right; font-size:11.5px; font-style:italic; color:var(--gold);}
   .share-note{width:100%; text-align:right; font-size:11.5px; font-family:'IBM Plex Mono',monospace; color:var(--moss-deep);}
   .stat .num.dual{font-size:17px; line-height:1.35;}
+  .page-head{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px;}
+  .page-title{font-family:'Fraunces',serif; font-size:22px; font-weight:600; margin:0;}
+  .nav-btns{display:flex; gap:8px; flex-wrap:wrap;}
   .locked-note{margin-left:36px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
 
   .module-actions{display:flex; gap:8px; margin-left:36px; margin-top:8px;}
@@ -298,7 +301,7 @@ const CATALOG = [
   {
     id: 'hnd-eee-topup',
     title: 'Top-up HND in Electrical & Electronic Engineering',
-    level: 'Level 5 · Pearson BTEC (starter template — edit units to match your enrolment)',
+    level: 'Level 5 · Pearson BTEC',
     verified:false,
     core: [
       { code:'U5-01', name:'Research Project (Engineering)' },
@@ -319,7 +322,7 @@ const CATALOG = [
   {
     id: 'hnc-mech',
     title: 'HNC in Mechanical Engineering',
-    level: 'Level 4 · Pearson BTEC (starter template — edit units to match your enrolment)',
+    level: 'Level 4 · Pearson BTEC',
     verified:false,
     core: [
       { code:'U4002', name:'Engineering Maths' },
@@ -357,7 +360,7 @@ const CATALOG = [
   {
     id: 'gen-eng',
     title: 'HNC in General Engineering',
-    level: 'Level 4 · Pearson BTEC (starter template — edit units to match your enrolment)',
+    level: 'Level 4 · Pearson BTEC',
     verified:false,
     core: [
       { code:'U4002', name:'Engineering Maths' },
@@ -377,7 +380,7 @@ const CATALOG = [
   {
     id: 'project-mgmt',
     title: 'Project Management',
-    level: 'Standalone / CPD track (starter template — edit units freely)',
+    level: 'Standalone / CPD track',
     verified:false,
     core: [
       { code:'PM-01', name:'Managing a Professional Engineering Project' },
@@ -395,7 +398,7 @@ const CATALOG = [
   {
     id: 'business-mgmt',
     title: 'HNC Business (Management)',
-    level: 'Level 4 · Pearson BTEC (starter template — edit units freely)',
+    level: 'Level 4 · Pearson BTEC',
     verified:false,
     core: [
       { code:'B-01', name:'Business Environment' },
@@ -803,13 +806,11 @@ function render(){
   else if(view.screen==='reports') app.appendChild(renderReports());
   else if(view.screen==='activity') app.appendChild(renderActivity());
   else if(view.screen==='balance') app.appendChild(renderBalance());
-  app.appendChild(el(`<div class="footer-note">THE LEDGER — a quiet place to track modules, assignments &amp; what's been paid</div>`));
 }
 
 function renderLogin(){
   const wrap = el(`<div class="card" style="max-width:380px; margin:40px auto;">
     <h2>Sign in</h2>
-    <div class="muted" style="margin-bottom:16px;">This tracker is private. Sign in with the account your administrator set up for you.</div>
     <div class="field"><label>Email</label><input id="loginEmail" type="email" placeholder="you@example.com" /></div>
     <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="••••••••" /></div>
     <div id="loginError" class="muted" style="color:var(--rust); margin-bottom:10px; display:none;"></div>
@@ -839,7 +840,7 @@ function renderBrand(){
   const wrap = el(`<div class="brand">
     <div>
       <h1>The <span>Ledger</span></h1>
-      <div class="tag">HNC · HND Assignment &amp; Payment Tracker</div>
+      <div class="tag">Assignment &amp; payment tracker</div>
     </div>
     <div class="switcher" id="switcher"></div>
   </div>`);
@@ -879,10 +880,13 @@ function renderBrand(){
 
 function renderProfiles(){
   const wrap = el(`<div></div>`);
-  wrap.appendChild(el(`<div class="card">
-    <h2>Students</h2>
-    <div class="muted">Create an account for each student, then track their courses, modules and assignment payments.</div>
-  </div>`));
+  const head = el(`<div class="page-head"><h2 class="page-title">Overview</h2><div class="nav-btns"></div></div>`);
+  [['Balance sheet','balance','moss'],['Reports','reports','ghost'],['Activity','activity','ghost']].forEach(([label,screen,cls])=>{
+    const b = el(`<button class="${cls}">${label}</button>`);
+    b.onclick = ()=>{ view = { screen, courseIdx:null, addingCourse:false, openModules:{}, reportPeriod:'week' }; render(); };
+    head.querySelector('.nav-btns').appendChild(b);
+  });
+  wrap.appendChild(head);
 
   const owed = globalOwed();
   const ledger = buildLedger();
@@ -890,15 +894,15 @@ function renderProfiles(){
   const jb = { GBP: ledger.byCurrency.GBP.jafterBalance, USD: ledger.byCurrency.USD.jafterBalance };
   const summaryCard = el(`<div class="card">
     <div class="stat-row">
-      <div class="stat"><div class="num">${students.length}</div><div class="lbl">Active students</div></div>
-      <div class="stat"><div class="num">${weekCompleted}</div><div class="lbl">Assignments done this week</div></div>
-      <div class="stat"><div class="num dual" style="color:var(--rust)">${pairInner(owed.totals)}</div><div class="lbl">Total owed</div></div>
+      <div class="stat"><div class="num">${students.length}</div><div class="lbl">Students</div></div>
+      <div class="stat"><div class="num">${weekCompleted}</div><div class="lbl">Done this week</div></div>
+      <div class="stat"><div class="num dual" style="color:var(--rust)">${pairInner(owed.totals)}</div><div class="lbl">Outstanding</div></div>
       <div class="stat"><div class="num dual" style="color:var(--moss-deep)">${pairInner(jb)}</div><div class="lbl">Jafter's balance</div></div>
     </div>
   </div>`);
   if(owed.byStudent.length>0){
     const owedList = el(`<div style="margin-top:14px;"></div>`);
-    owedList.appendChild(el(`<div class="grouptitle" style="margin-bottom:8px;">Who owes what</div>`));
+    owedList.appendChild(el(`<div class="grouptitle" style="margin-bottom:8px;">Outstanding by student</div>`));
     owed.byStudent.forEach(o=>{
       owedList.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:5px 0;">
         <span>${escapeHtml(o.name)}</span><span style="color:var(--rust); font-family:'IBM Plex Mono',monospace;">${money(o.amount, o.currency)}</span>
@@ -906,20 +910,11 @@ function renderProfiles(){
     });
     summaryCard.appendChild(owedList);
   }
-  const balanceBtn = el(`<button class="moss" style="margin-top:14px;">⚖ Balance sheet</button>`);
-  balanceBtn.onclick = ()=>{ view = { screen:'balance', courseIdx:null, addingCourse:false, openModules:{} }; render(); };
-  summaryCard.appendChild(balanceBtn);
-  const reportsBtn = el(`<button class="ghost" style="margin-top:14px; margin-left:10px;">📊 View reports</button>`);
-  reportsBtn.onclick = ()=>{ view = { screen:'reports', courseIdx:null, addingCourse:false, openModules:{}, reportPeriod:'week' }; render(); };
-  summaryCard.appendChild(reportsBtn);
-  const activityBtn = el(`<button class="ghost" style="margin-top:14px; margin-left:10px;">🕒 Activity log</button>`);
-  activityBtn.onclick = ()=>{ view = { screen:'activity', courseIdx:null, addingCourse:false, openModules:{} }; render(); };
-  summaryCard.appendChild(activityBtn);
   wrap.appendChild(summaryCard);
 
   const listCard = el(`<div class="card"></div>`);
   if(students.length===0){
-    listCard.appendChild(el(`<div class="empty"><div class="big">No students yet</div>Add your first student to get started.</div>`));
+    listCard.appendChild(el(`<div class="empty"><div class="big">No students yet</div></div>`));
   } else {
     const grid = el(`<div class="profiles-grid"></div>`);
     students.forEach(s=>{
@@ -950,7 +945,7 @@ function renderProfiles(){
   addBtn.onclick = ()=> openAddStudentModal();
   listCard.appendChild(addBtn);
   if(trashedStudents.length>0){
-    const trashBtn = el(`<button class="ghost" style="margin-top:16px; margin-left:10px;">🗑 Trash (${trashedStudents.length})</button>`);
+    const trashBtn = el(`<button class="ghost" style="margin-top:16px; margin-left:10px;">Trash (${trashedStudents.length})</button>`);
     trashBtn.onclick = ()=>{ view = { screen:'trash', courseIdx:null, addingCourse:false, openModules:{} }; render(); };
     listCard.appendChild(trashBtn);
   }
@@ -978,7 +973,6 @@ function openEditStudentModal(s){
     <div class="field"><label>Full name</label><input id="editName" value="${escapeHtml(s.name)}" /></div>
     <div class="field"><label>Note (optional)</label><input id="editNote" value="${escapeHtml(s.note||'')}" /></div>
     ${moneyFieldsHtml(s)}
-    <div class="muted" style="margin-bottom:12px; font-size:11.5px;">Changing the share only affects assignments marked paid from now on. Shares already locked in on earlier paid assignments keep the figure they were given.</div>
     <div class="row">
       <button class="ghost" id="cancelEdit">Cancel</button>
       <button class="moss" id="confirmEdit">Save changes</button>
@@ -1023,7 +1017,6 @@ function renderTrash(){
 
   wrap.appendChild(el(`<div class="card">
     <h2>Trash</h2>
-    <div class="muted">Deleted students land here. Their course and payment records are kept — restore any time, or delete permanently once you're sure.</div>
   </div>`));
 
   if(trashedStudents.length===0){
@@ -1103,15 +1096,14 @@ function renderReports(){
 
   wrap.appendChild(el(`<div class="card">
     <h2>Reports</h2>
-    <div class="muted">Assignments completed and money collected, across all students. Only records completed after reporting was added are included in these date-based figures — older completions still count in each student's all-time totals.</div>
   </div>`));
 
   const missingCount = allAssignmentsFlat().filter(a=>isAssignmentDone(a) && !a.completedAt).length;
   if(missingCount>0){
     const backfillCard = el(`<div class="card" style="border-left:4px solid var(--rust);">
-      <div class="muted">${missingCount} assignment${missingCount===1?'':'s'} ${missingCount===1?'was':'were'} marked done before reporting existed, so ${missingCount===1?'it has':'they have'} no completion date and won't show up in the counts below.</div>
+      <div class="muted">${missingCount} assignment${missingCount===1?'':'s'} without a completion date</div>
     </div>`);
-    const backfillBtn = lockIfReadOnly(el(`<button class="ghost" style="margin-top:10px;">Backfill missing dates to today</button>`));
+    const backfillBtn = lockIfReadOnly(el(`<button class="ghost" style="margin-top:10px;">Set to today</button>`));
     backfillBtn.onclick = ()=> backfillMissingTimestamps(missingCount);
     backfillCard.appendChild(backfillBtn);
     wrap.appendChild(backfillCard);
@@ -1128,14 +1120,14 @@ function renderReports(){
 
   const report = reportForPeriod(period);
   periodCard.appendChild(el(`<div class="stat-row" style="margin-top:16px;">
-    <div class="stat"><div class="num">${report.completedCount}</div><div class="lbl">Assignments completed</div></div>
-    <div class="stat"><div class="num dual">${pairInner(report.totalPaid)}</div><div class="lbl">Money collected</div></div>
+    <div class="stat"><div class="num">${report.completedCount}</div><div class="lbl">Completed</div></div>
+    <div class="stat"><div class="num dual">${pairInner(report.totalPaid)}</div><div class="lbl">Collected</div></div>
   </div>`));
   wrap.appendChild(periodCard);
 
   const byStudentCard = el(`<div class="card"><h2>By student</h2></div>`);
   if(report.byStudent.length===0){
-    byStudentCard.appendChild(el(`<div class="empty" style="padding:24px;">Nothing recorded for this period yet.</div>`));
+    byStudentCard.appendChild(el(`<div class="empty" style="padding:24px;">No data for this period</div>`));
   } else {
     report.byStudent.forEach(row=>{
       byStudentCard.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:8px 0; border-top:1px dashed var(--line);">
@@ -1147,9 +1139,9 @@ function renderReports(){
   wrap.appendChild(byStudentCard);
 
   const owed = globalOwed();
-  const owedCard = el(`<div class="card"><h2>Currently outstanding (all-time)</h2><div class="muted">Not period-specific — this is what's owed right now.</div></div>`);
+  const owedCard = el(`<div class="card"><h2>Outstanding</h2></div>`);
   if(owed.byStudent.length===0){
-    owedCard.appendChild(el(`<div class="empty" style="padding:24px;">Nobody currently owes anything.</div>`));
+    owedCard.appendChild(el(`<div class="empty" style="padding:24px;">Nothing outstanding</div>`));
   } else {
     owed.byStudent.forEach(o=>{
       owedCard.appendChild(el(`<div class="elective-opt" style="justify-content:space-between; padding:8px 0; border-top:1px dashed var(--line);">
@@ -1234,13 +1226,12 @@ function renderBalance(){
 
   wrap.appendChild(el(`<div class="card">
     <h2>Balance sheet</h2>
-    <div class="muted">Pounds and dollars are kept apart. Every paid assignment is split automatically: Jafter gets his set USD share (converted to pounds for students who pay in pounds) and the rest is yours.</div>
   </div>`));
 
   // Exchange rate
   const rateCard = el(`<div class="card" ${rateIsSet ? '' : 'style="border-left:4px solid var(--rust);"'}>
     <h2>Exchange rate</h2>
-    <div class="muted" style="margin-bottom:10px;">${rateIsSet ? 'Used to turn Jafter\'s USD share into pounds for students who pay in pounds, and to show his total in dollars.' : '<strong>No rate saved yet.</strong> The app is using a placeholder of 1.30 — please enter the real rate, because it decides how much of each pound payment goes to Jafter.'}</div>
+    ${rateIsSet ? '' : '<div class="muted" style="color:var(--rust); margin-bottom:10px;">Not set — using 1.30</div>'}
     <div class="row" style="align-items:flex-end;">
       <div class="field" style="margin:0;"><label>1 GBP =</label><input id="rateInput" type="number" min="0.0001" step="0.0001" value="${exchangeRate}" /></div>
       <div style="flex:0 0 auto;"><span class="muted" style="margin-right:10px;">USD</span></div>
@@ -1257,9 +1248,9 @@ function renderBalance(){
 
   if(L.unlockedCount > 0){
     const lockCard = el(`<div class="card" style="border-left:4px solid var(--gold);">
-      <div class="muted">${L.unlockedCount} paid assignment${L.unlockedCount===1?'':'s'} ${L.unlockedCount===1?'was':'were'} marked paid before shares were tracked. ${L.unlockedCount===1?'It is':'They are'} counted below at today's rate, which means ${L.unlockedCount===1?'it':'they'} would shift if you change the rate. Lock ${L.unlockedCount===1?'it':'them'} in to fix the figures.</div>
+      <div class="muted">${L.unlockedCount} paid assignment${L.unlockedCount===1?'':'s'} not locked to a rate</div>
     </div>`);
-    const lockBtn = lockIfReadOnly(el(`<button class="ghost" style="margin-top:10px;">Lock in shares at today's rate</button>`));
+    const lockBtn = lockIfReadOnly(el(`<button class="ghost" style="margin-top:10px;">Lock in shares</button>`));
     lockBtn.onclick = ()=> lockInShares(L.unlockedCount);
     lockCard.appendChild(lockBtn);
     wrap.appendChild(lockCard);
@@ -1269,26 +1260,23 @@ function renderBalance(){
   const jOwedGbp = G.jafterBalance, jOwedUsd = U.jafterBalance;
   wrap.appendChild(el(`<div class="card">
     <h2>Jafter's balance</h2>
-    <div class="muted">What he has earned minus what you have already paid him.</div>
     <div class="stat-row">
-      <div class="stat"><div class="num" style="color:${jOwedGbp<0?'var(--rust)':'var(--moss-deep)'}">${money(jOwedGbp,'GBP')}</div><div class="lbl">Owed in pounds</div></div>
-      <div class="stat"><div class="num" style="color:${jOwedUsd<0?'var(--rust)':'var(--moss-deep)'}">${money(jOwedUsd,'USD')}</div><div class="lbl">Owed in dollars</div></div>
-      <div class="stat"><div class="num">${money(L.jafterUsdEquivalent,'USD')}</div><div class="lbl">Total in USD at ${exchangeRate}</div></div>
+      <div class="stat"><div class="num" style="color:${jOwedGbp<0?'var(--rust)':'var(--moss-deep)'}">${money(jOwedGbp,'GBP')}</div><div class="lbl">Pounds</div></div>
+      <div class="stat"><div class="num" style="color:${jOwedUsd<0?'var(--rust)':'var(--moss-deep)'}">${money(jOwedUsd,'USD')}</div><div class="lbl">Dollars</div></div>
+      <div class="stat"><div class="num">${money(L.jafterUsdEquivalent,'USD')}</div><div class="lbl">Total in USD @ ${exchangeRate}</div></div>
     </div>
-    ${(jOwedGbp<0 || jOwedUsd<0) ? `<div class="muted" style="margin-top:10px; color:var(--rust);">A negative balance means more has been paid out than he has earned in that currency.</div>` : ''}
   </div>`));
 
   // One sheet per currency
   CURRENCY_LIST.forEach(c=>{
     const t = L.byCurrency[c];
     const card = el(`<div class="card"><h2>${CURRENCIES[c].name} (${c})</h2>
-      <div class="muted">${t.paidCount} paid assignment${t.paidCount===1?'':'s'} in ${c}</div>
-      ${sheetRow('Money collected', money(t.paid,c), {bold:true})}
-      ${sheetRow('Jafter\'s share earned', '− '+money(t.jafterShare,c), {hint: c==='USD' ? 'His set USD amount per paid assignment' : 'His USD amount converted at the rate stored on each assignment'})}
+      ${sheetRow('Collected', money(t.paid,c), {bold:true})}
+      ${sheetRow('Jafter\'s share', '− '+money(t.jafterShare,c))}
       ${sheetRow('Your share', money(t.yourShare,c), {bold:true, top:true, color:'var(--moss-deep)'})}
-      ${sheetRow('Paid out to Jafter so far', money(t.paidOut,c))}
-      ${sheetRow('Still owed to Jafter', money(t.jafterBalance,c), {bold:true, color: t.jafterBalance<0 ? 'var(--rust)' : 'var(--moss-deep)'})}
-      ${sheetRow('Owed by students, not yet collected', money(t.outstanding,c), {color:'var(--rust)', hint:'Not counted in anything above until it is paid'})}
+      ${sheetRow('Paid out to Jafter', money(t.paidOut,c))}
+      ${sheetRow('Jafter\'s balance', money(t.jafterBalance,c), {bold:true, color: t.jafterBalance<0 ? 'var(--rust)' : 'var(--moss-deep)'})}
+      ${sheetRow('Outstanding', money(t.outstanding,c), {color:'var(--rust)'})}
     </div>`);
     wrap.appendChild(card);
   });
@@ -1296,7 +1284,6 @@ function renderBalance(){
   // Payouts
   const payCard = el(`<div class="card">
     <h2>Payouts to Jafter</h2>
-    <div class="muted" style="margin-bottom:12px;">Record each time you pay him. It comes straight off his balance in that currency.</div>
     <div class="row" style="align-items:flex-end;">
       <div class="field" style="margin:0;"><label>Amount</label><input id="payAmount" type="number" min="0" step="0.01" placeholder="0.00" /></div>
       <div class="field" style="margin:0;"><label>Currency</label><select id="payCur">${CURRENCY_LIST.map(c=>`<option value="${c}">${CURRENCIES[c].symbol} ${c}</option>`).join('')}</select></div>
@@ -1316,12 +1303,12 @@ function renderBalance(){
   };
   payCard.appendChild(addPayBtn);
   if(payouts.length===0){
-    payCard.appendChild(el(`<div class="muted" style="margin-top:14px;">No payouts recorded yet.</div>`));
+    payCard.appendChild(el(`<div class="muted" style="margin-top:14px;">No payouts</div>`));
   } else {
     const list = el(`<div style="margin-top:14px;"></div>`);
     payouts.forEach(p=>{
       const row = el(`<div class="elective-opt" style="justify-content:space-between; padding:9px 0; border-top:1px dashed var(--line);">
-        <span>${new Date(p.date).toLocaleDateString()}${p.note ? ' · '+escapeHtml(p.note) : ''}<span class="muted" style="display:block; font-size:11.5px;">recorded by ${escapeHtml(p.byEmail||'unknown')}</span></span>
+        <span>${new Date(p.date).toLocaleDateString()}${p.note ? ' · '+escapeHtml(p.note) : ''}<span class="muted" style="display:block; font-size:11.5px;">by ${escapeHtml(p.byEmail||'unknown')}</span></span>
         <span style="display:flex; align-items:center; gap:10px;"><span style="font-family:'IBM Plex Mono',monospace;">${money(p.amount, p.currency)}</span></span>
       </div>`);
       const del = lockIfReadOnly(el(`<button class="subtle" style="font-size:11px;">Delete</button>`));
@@ -1334,7 +1321,7 @@ function renderBalance(){
   wrap.appendChild(payCard);
 
   // Per student
-  const stuCard = el(`<div class="card"><h2>By student</h2><div class="muted">All-time, in each student's own currency.</div></div>`);
+  const stuCard = el(`<div class="card"><h2>By student</h2></div>`);
   if(L.perStudent.length===0){
     stuCard.appendChild(el(`<div class="empty" style="padding:24px;">No students yet.</div>`));
   } else {
@@ -1360,12 +1347,11 @@ function renderActivity(){
 
   wrap.appendChild(el(`<div class="card">
     <h2>Activity log</h2>
-    <div class="muted">Who changed what, and when. Shows the most recent ${activityLog.length} action${activityLog.length===1?'':'s'}.</div>
   </div>`));
 
   const listCard = el(`<div class="card"></div>`);
   if(activityLog.length===0){
-    listCard.appendChild(el(`<div class="empty" style="padding:24px;">No activity recorded yet.</div>`));
+    listCard.appendChild(el(`<div class="empty" style="padding:24px;">No activity</div>`));
   } else {
     activityLog.forEach(entry=>{
       const row = el(`<div style="padding:10px 0; border-top:1px dashed var(--line); font-size:13.5px;">
@@ -1389,13 +1375,12 @@ function moneyFieldsHtml(s){
           ${CURRENCY_LIST.map(c=>`<option value="${c}" ${studentCurrency(s)===c?'selected':''}>${CURRENCIES[c].symbol} ${CURRENCIES[c].name} (${c})</option>`).join('')}
         </select>
       </div>
-      <div class="field"><label>Price per assignment (optional)</label>
+      <div class="field"><label>Price per assignment</label>
         <input id="mfPrice" type="number" min="0" step="0.01" placeholder="e.g. 80" value="${s.defaultPrice ?? ''}" />
       </div>
     </div>
-    <div class="field"><label>Jafter's share per paid assignment (in USD)</label>
+    <div class="field"><label>Jafter's share (USD)</label>
       <input id="mfShare" type="number" min="0" step="0.01" value="${s.jafterShareUsd ?? DEFAULT_SHARE_USD}" />
-      <div class="muted" style="margin-top:4px; font-size:11.5px;">If this student pays in pounds, the share is converted to pounds at the exchange rate on the Balance sheet.</div>
     </div>`;
 }
 function readMoneyFields(root){
@@ -1464,12 +1449,12 @@ function renderDashboard(){
     <div class="course-head">
       <div class="titles">
         <h2>${escapeHtml(student.name)}</h2>
-        <div class="muted">${student.note ? escapeHtml(student.note)+' · ' : ''}Pays in ${cur} · Jafter's share $${student.jafterShareUsd} per paid assignment</div>
+        <div class="muted">${student.note ? escapeHtml(student.note)+' · ' : ''}${cur} · $${student.jafterShareUsd} share</div>
       </div>
     </div>
     <div class="stat-row">
       <div class="stat"><div class="num">${courses.length}</div><div class="lbl">Courses</div></div>
-      <div class="stat"><div class="num">${doneAssignments}/${totalAssignments}</div><div class="lbl">Assignments done</div></div>
+      <div class="stat"><div class="num">${doneAssignments}/${totalAssignments}</div><div class="lbl">Done</div></div>
       <div class="stat"><div class="num">${money(totalPaid, cur)}</div><div class="lbl">Total paid</div></div>
       <div class="stat"><div class="num" style="color:var(--rust)">${money(totalOutstanding, cur)}</div><div class="lbl">Outstanding</div></div>
       <div class="stat"><div class="num" style="color:var(--moss-deep)">${money(jafterShareTotal, cur)}</div><div class="lbl">Jafter's share</div></div>
@@ -1486,7 +1471,7 @@ function renderDashboard(){
   wrap.appendChild(headerCard);
 
   const top = el(`<div class="top-actions"></div>`);
-  top.appendChild(el(`<div class="muted">Enrolled courses</div>`));
+  top.appendChild(el(`<div class="grouptitle">Courses</div>`));
   const addCourseBtn = lockIfReadOnly(el(`<button class="moss">+ Add course</button>`));
   addCourseBtn.onclick = ()=>{ view.addingCourse = true; view.screen='course'; view.courseIdx=null; render(); };
   top.appendChild(addCourseBtn);
@@ -1508,7 +1493,7 @@ function renderDashboard(){
           <span class="pill ${complete?'done':'progress'}">${complete? 'Complete' : prog+'% done'}</span>
         </div>
         <div class="row" style="margin-top:14px;">
-          <div class="muted">Paid so far: <strong style="color:var(--gold)">${money(coursePaidTotal(course), cur)}</strong>${courseOutstanding(course)>0 ? ` &nbsp;·&nbsp; Outstanding: <strong style="color:var(--rust)">${money(courseOutstanding(course), cur)}</strong>` : ''}</div>
+          <div class="muted">Paid: <strong style="color:var(--gold)">${money(coursePaidTotal(course), cur)}</strong>${courseOutstanding(course)>0 ? ` &nbsp;·&nbsp; Outstanding: <strong style="color:var(--rust)">${money(courseOutstanding(course), cur)}</strong>` : ''}</div>
         </div>
       </div>`);
       card.querySelector('.course-head').addEventListener('click', ()=>{
@@ -1548,15 +1533,15 @@ function renderCourse(){
     </div>
     <div class="stat-row">
       <div class="stat"><div class="num">${course.modules.length}</div><div class="lbl">Modules</div></div>
-      <div class="stat"><div class="num">${course.modules.reduce((s,m)=>s+m.assignments.filter(isAssignmentDone).length,0)}/${course.modules.reduce((s,m)=>s+m.assignments.length,0)}</div><div class="lbl">Assignments done</div></div>
-      <div class="stat"><div class="num">${money(coursePaidTotal(course), cur)}</div><div class="lbl">Paid so far</div></div>
+      <div class="stat"><div class="num">${course.modules.reduce((s,m)=>s+m.assignments.filter(isAssignmentDone).length,0)}/${course.modules.reduce((s,m)=>s+m.assignments.length,0)}</div><div class="lbl">Done</div></div>
+      <div class="stat"><div class="num">${money(coursePaidTotal(course), cur)}</div><div class="lbl">Paid</div></div>
       <div class="stat"><div class="num" style="color:var(--rust)">${money(courseOutstanding(course), cur)}</div><div class="lbl">Outstanding</div></div>
     </div>
   </div>`);
   wrap.appendChild(head);
 
   const modCard = el(`<div class="card"></div>`);
-  modCard.appendChild(el(`<h2>Modules</h2><div class="muted">Complete a module's assignments to unlock the next one.</div>`));
+  modCard.appendChild(el(`<h2>Modules</h2>`));
 
   let priorComplete = true;
   course.modules.forEach((m, mIdx)=>{
@@ -1586,7 +1571,6 @@ function renderCourse(){
     modEl.appendChild(head2);
 
     if(locked){
-      modEl.appendChild(el(`<div class="locked-note">Complete the previous module to unlock this one.</div>`));
     } else if(isOpen){
       const list = el(`<div class="assignments"></div>`);
       m.assignments.forEach(a=>{
@@ -1671,8 +1655,7 @@ function renderCourse(){
 
           if(isPaidWithAmount(a)){
             const sh = assignmentShare(a, student);
-            const how = cur==='USD' ? '' : ` ($${typeof a.shareUsd==='number' ? a.shareUsd : student.jafterShareUsd} at ${typeof a.shareRate==='number' ? a.shareRate : exchangeRate})`;
-            row.appendChild(el(`<div class="share-note">Jafter's share ${money(sh, cur)}${how} · yours ${money(round2((Number(a.paid)||0) - sh), cur)}</div>`));
+            row.appendChild(el(`<div class="share-note">Jafter ${money(sh, cur)} · You ${money(round2((Number(a.paid)||0) - sh), cur)}</div>`));
           }
 
           const paidDateWrap = el(`<div class="adate"><span>paid on</span></div>`);
@@ -1685,8 +1668,6 @@ function renderCourse(){
           });
           paidDateWrap.appendChild(paidDateInput);
           row.appendChild(paidDateWrap);
-        } else if(a.status==='done_self'){
-          row.appendChild(el(`<div class="self-note">Completed independently — no payment recorded</div>`));
         }
         list.appendChild(row);
       });
@@ -1775,7 +1756,7 @@ function openAddElectiveModal(course, cat){
     });
   });
   if(!anyLeft){
-    modal.appendChild(el(`<div class="muted">All catalog units for this course have already been added.</div>`));
+    modal.appendChild(el(`<div class="muted">None left to add.</div>`));
   }
   const closeBtn = el(`<button class="ghost" style="margin-top:14px;">Close</button>`);
   closeBtn.onclick = ()=> bg.remove();
@@ -1820,7 +1801,7 @@ function renderAddCourse(){
   wrap.appendChild(back);
 
   if(!addCourseState){
-    const card = el(`<div class="card"><h2>Choose a course</h2><div class="muted">Pick a course to enrol in. You'll then select electives and the app builds the module list — including any electives you choose.</div><div class="catalog-list" id="catList"></div></div>`);
+    const card = el(`<div class="card"><h2>Choose a course</h2><div class="catalog-list" id="catList"></div></div>`);
     const list = card.querySelector('#catList');
     CATALOG.forEach(c=>{
       const item = el(`<div class="catalog-item">
@@ -1828,7 +1809,6 @@ function renderAddCourse(){
           <div class="ctitle">${escapeHtml(c.title)}</div>
           <div class="cmeta">${escapeHtml(c.level)}</div>
         </div>
-        <span class="pill ${c.verified?'done':'progress'}">${c.verified?'Verified units':'Editable template'}</span>
       </div>`);
       item.onclick = ()=>{
         addCourseState = { catalogId:c.id, chosen:{} };
@@ -1862,7 +1842,7 @@ function renderAddCourse(){
   </div>`);
   wrap.appendChild(card);
 
-  const coreCard = el(`<div class="card"><h2>Core units (included automatically)</h2></div>`);
+  const coreCard = el(`<div class="card"><h2>Core units</h2></div>`);
   const coreList = el(`<div style="margin-top:10px;"></div>`);
   cat.core.forEach(m=> coreList.appendChild(el(`<div class="elective-opt">✓ <strong>${escapeHtml(m.code)}</strong> — ${escapeHtml(m.name)}</div>`)));
   coreCard.appendChild(coreList);
@@ -1904,8 +1884,7 @@ function renderAddCourse(){
   const actionCard = el(`<div class="card"></div>`);
   const anyChosen = cat.groups.some((g,gIdx)=> addCourseState.chosen[gIdx].length>0);
   const allSatisfied = cat.groups.every((g,gIdx)=> addCourseState.chosen[gIdx].length === g.chooseCount);
-  actionCard.appendChild(el(`<div class="muted" style="margin-bottom:10px;">Core units are always included. You don't need to pick every elective now — create the course and add the rest later from the course page.</div>`));
-  const confirmBtn = el(`<button class="moss">${allSatisfied ? 'Create course &amp; build module ledger' : anyChosen ? 'Create course with these units so far' : 'Create course with core units only'}</button>`);
+  const confirmBtn = el(`<button class="moss">${allSatisfied ? 'Create course' : anyChosen ? 'Create with selected units' : 'Create with core units'}</button>`);
   confirmBtn.onclick = async ()=>{
     const modules = [];
     cat.core.forEach(m=> modules.push(makeModule(m.code, m.name, 1)));

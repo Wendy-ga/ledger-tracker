@@ -631,10 +631,10 @@ function isPaidWithAmount(a){ return a.status==='done_paid' && (Number(a.paid)||
 // Lock in (or clear) the share stored on one assignment. Call after any status or amount change.
 function syncShare(a, student){
   if(isPaidWithAmount(a)){
-    if(typeof a.share !== 'number'){
-      const s = shareForStudent(student);
-      a.share = s.share; a.shareUsd = s.shareUsd; a.shareRate = s.rate; a.shareAt = Date.now();
-    }
+    // Only the exchange rate is frozen; the amount follows the student's current USD share.
+    delete a.share; delete a.shareUsd;
+    if(studentCurrency(student)==='USD'){ delete a.shareRate; }
+    else if(!(typeof a.shareRate==='number' && a.shareRate>0)){ a.shareRate = exchangeRate; a.shareAt = Date.now(); }
   } else {
     delete a.share; delete a.shareUsd; delete a.shareRate; delete a.shareAt;
   }
@@ -643,8 +643,10 @@ function syncShare(a, student){
 // The share for one assignment: the locked-in figure if it has one, otherwise what it would be at today's rate.
 function assignmentShare(a, student){
   if(!isPaidWithAmount(a)) return 0;
-  if(typeof a.share === 'number') return a.share;
-  return shareForStudent(student).share;
+  const usd = Number(student.jafterShareUsd) || 0;
+  if(studentCurrency(student)==='USD') return round2(usd);
+  const r = (typeof a.shareRate==='number' && a.shareRate>0) ? a.shareRate : exchangeRate;
+  return round2(usd / r);
 }
 
 function buildLedger(){
@@ -662,7 +664,7 @@ function buildLedger(){
         if(isPaidWithAmount(a)){
           row.jafterShare += assignmentShare(a, s);
           row.paidCount++;
-          if(typeof a.share !== 'number') unlockedCount++;
+          if(studentCurrency(s)!=='USD' && !(typeof a.shareRate==='number' && a.shareRate>0)) unlockedCount++;
         }
       } else if(a.status==='done_unpaid'){
         row.outstanding += Number(a.due)||0;
@@ -869,7 +871,7 @@ function renderBrand(){
     }
     sw.appendChild(el(`<span class="muted" style="font-size:11.5px; font-family:'IBM Plex Mono',monospace;">${escapeHtml(currentUser.email||'')}</span>`));
     if(isReadOnly){
-      sw.appendChild(el(`<span class="pill locked" title="You can view everything but can't make changes">View only</span>`));
+      sw.appendChild(el(`<span class="pill locked" title="View only: changes are disabled">View only</span>`));
     }
     const signOutBtn = el(`<button class="subtle" style="font-size:12px;" title="${escapeHtml(currentUser.email||'')}">Sign out</button>`);
     signOutBtn.onclick = ()=> auth.signOut();
@@ -1196,7 +1198,7 @@ async function lockInShares(count){
   const changed = new Set();
   students.forEach(s=>{
     (studentCourses[s.id]||[]).forEach(c=>c.modules.forEach(m=>m.assignments.forEach(a=>{
-      if(isPaidWithAmount(a) && typeof a.share !== 'number'){ syncShare(a, s); changed.add(s.id); }
+      if(isPaidWithAmount(a) && studentCurrency(s)!=='USD' && !(typeof a.shareRate==='number' && a.shareRate>0)){ syncShare(a, s); changed.add(s.id); }
     })));
   });
   for(const id of changed){ await saveCourses(id); }
@@ -1273,7 +1275,7 @@ function renderBalance(){
     const card = el(`<div class="card"><h2>${CURRENCIES[c].name} (${c})</h2>
       ${sheetRow('Collected', money(t.paid,c), {bold:true})}
       ${sheetRow('Jafter\'s share', '− '+money(t.jafterShare,c))}
-      ${sheetRow('Your share', money(t.yourShare,c), {bold:true, top:true, color:'var(--moss-deep)'})}
+      ${sheetRow('Wendy\'s share', money(t.yourShare,c), {bold:true, top:true, color:'var(--moss-deep)'})}
       ${sheetRow('Paid out to Jafter', money(t.paidOut,c))}
       ${sheetRow('Jafter\'s balance', money(t.jafterBalance,c), {bold:true, color: t.jafterBalance<0 ? 'var(--rust)' : 'var(--moss-deep)'})}
       ${sheetRow('Outstanding', money(t.outstanding,c), {color:'var(--rust)'})}
@@ -1329,7 +1331,7 @@ function renderBalance(){
       stuCard.appendChild(el(`<div style="padding:10px 0; border-top:1px dashed var(--line);">
         <div style="display:flex; justify-content:space-between;"><strong>${escapeHtml(r.name)}</strong><span class="pill locked">${r.currency}</span></div>
         <div class="muted" style="font-family:'IBM Plex Mono',monospace; font-size:12px; margin-top:4px;">
-          collected ${money(r.paid,r.currency)} · Jafter ${money(r.jafterShare,r.currency)} · you ${money(r.yourShare,r.currency)}${r.outstanding>0 ? ` · <span style="color:var(--rust)">owes ${money(r.outstanding,r.currency)}</span>` : ''}
+          collected ${money(r.paid,r.currency)} · Jafter ${money(r.jafterShare,r.currency)} · Wendy ${money(r.yourShare,r.currency)}${r.outstanding>0 ? ` · <span style="color:var(--rust)">owes ${money(r.outstanding,r.currency)}</span>` : ''}
         </div>
       </div>`));
     });
@@ -1603,7 +1605,7 @@ function renderCourse(){
             syncShare(a, student);   // locks in Jafter's share automatically when paid with an amount, clears it otherwise
             saveCourses(currentStudentId);
             const statusLabels = { not_started:'Not done', done_unpaid:'Done — not yet paid', done_paid:'Done — paid', done_self:'Done independently' };
-            const shareNote = typeof a.share === 'number' ? ` · Jafter's share ${money(a.share, cur)}` : '';
+            const shareNote = isPaidWithAmount(a) ? ` · Jafter's share ${money(assignmentShare(a, student), cur)}` : '';
             logActivity('Marked assignment: '+statusLabels[newStatus], `${m.name} — ${a.label}${shareNote}`, currentStudentName());
             render();
           });
@@ -1646,7 +1648,7 @@ function renderCourse(){
             a.paid = payInput.value === '' ? 0 : Number(payInput.value);
             syncShare(a, student);   // an amount above zero locks in the share; zero clears it
             saveCourses(currentStudentId);
-            const shareNote = typeof a.share === 'number' ? ` · Jafter's share ${money(a.share, cur)}` : '';
+            const shareNote = isPaidWithAmount(a) ? ` · Jafter's share ${money(assignmentShare(a, student), cur)}` : '';
             logActivity('Updated amount paid', `${m.name} — ${a.label} → ${money(a.paid, cur)}${shareNote}`, currentStudentName());
             render();
           });
@@ -1655,7 +1657,7 @@ function renderCourse(){
 
           if(isPaidWithAmount(a)){
             const sh = assignmentShare(a, student);
-            row.appendChild(el(`<div class="share-note">Jafter ${money(sh, cur)} · You ${money(round2((Number(a.paid)||0) - sh), cur)}</div>`));
+            row.appendChild(el(`<div class="share-note">Jafter ${money(sh, cur)} · Wendy ${money(round2((Number(a.paid)||0) - sh), cur)}</div>`));
           }
 
           const paidDateWrap = el(`<div class="adate"><span>paid on</span></div>`);
@@ -1711,7 +1713,7 @@ function renderCourse(){
   wrap.appendChild(modCard);
 
   const dangerCard = el(`<div class="card">
-    <button class="subtle" id="removeCourseBtn">Remove this course from ${escapeHtml(students.find(s=>s.id===currentStudentId).name)}'s tracker</button>
+    <button class="subtle" id="removeCourseBtn">Remove course</button>
   </div>`);
   lockIfReadOnly(dangerCard.querySelector('#removeCourseBtn'));
   dangerCard.querySelector('#removeCourseBtn').onclick = async ()=>{
@@ -1866,7 +1868,7 @@ function renderAddCourse(){
               const chosenOutsidePool = arr.some(code => !poolCodes.includes(code));
               if(chosenOutsidePool){ cb.checked=false; toast('Choose both units from the SAME group only'); return; }
             }
-            if(arr.length >= g.chooseCount){ cb.checked=false; toast('You can choose '+g.chooseCount+' for this group'); return; }
+            if(arr.length >= g.chooseCount){ cb.checked=false; toast('Choose up to '+g.chooseCount+' for this group'); return; }
             arr.push(opt.code);
           } else {
             addCourseState.chosen[gIdx] = arr.filter(c=>c!==opt.code);
@@ -1901,7 +1903,7 @@ function renderAddCourse(){
     logActivity('Added course', cat.title, currentStudentName());
     addCourseState = null;
     view = { screen:'course', courseIdx: studentCourses[currentStudentId].length-1, addingCourse:false, openModules:{} };
-    toast(allSatisfied ? 'Course added — set assignment counts per module as needed' : 'Course added — you can add remaining electives anytime from this page');
+    toast(allSatisfied ? 'Course added — set assignment counts per module as needed' : 'Course added — remaining electives can be added from this page');
     render();
   };
   actionCard.appendChild(confirmBtn);

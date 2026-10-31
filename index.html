@@ -160,6 +160,9 @@
   .adate input{width:140px; padding:5px 8px; font-size:12px;}
   .adate span{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em;}
   .self-note{width:100%; text-align:right; font-size:11.5px; font-style:italic; color:var(--gold);}
+  .proj-row{display:flex; justify-content:flex-end; align-items:center; gap:14px; margin-top:8px; flex-wrap:wrap;}
+  .proj-check{display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;}
+  .proj-check input{width:auto;}
   .share-note{width:100%; text-align:right; font-size:11.5px; font-family:'IBM Plex Mono',monospace; color:var(--moss-deep);}
   .stat .num.dual{font-size:17px; line-height:1.35;}
   .page-head{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px;}
@@ -643,7 +646,7 @@ function syncShare(a, student){
 // The share for one assignment: the locked-in figure if it has one, otherwise what it would be at today's rate.
 function assignmentShare(a, student){
   if(!isPaidWithAmount(a)) return 0;
-  const usd = Number(student.jafterShareUsd) || 0;
+  const usd = a.isProject ? (Number(a.projectShareUsd)||0) : (Number(student.jafterShareUsd) || 0);
   if(studentCurrency(student)==='USD') return round2(usd);
   const r = (typeof a.shareRate==='number' && a.shareRate>0) ? a.shareRate : exchangeRate;
   return round2(usd / r);
@@ -1594,8 +1597,8 @@ function renderCourse(){
             const newStatus = (a.status===opt.key) ? 'not_started' : opt.key;
             a.status = newStatus;
             // Pre-fill the amount from the student's price per assignment, if one is set
-            if(newStatus==='done_unpaid' && (a.due===null || a.due===undefined) && student.defaultPrice) a.due = student.defaultPrice;
-            if(newStatus==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? student.defaultPrice ?? null;
+            if(a.isProject){} else if(newStatus==='done_unpaid' && (a.due===null || a.due===undefined) && student.defaultPrice) a.due = student.defaultPrice;
+            if(!a.isProject && newStatus==='done_paid' && (a.paid===null || a.paid===undefined)) a.paid = a.due ?? student.defaultPrice ?? null;
             if(newStatus==='not_started'){
               a.paid = null; a.due = null; a.completedAt = null; a.paidAt = null;
             } else {
@@ -1612,6 +1615,36 @@ function renderCourse(){
           seg.appendChild(btn);
         });
         row.appendChild(seg);
+
+        // Project: charged differently, so it carries its own Jafter share (USD) instead of the student's default
+        const projRow = el(`<div class="proj-row"></div>`);
+        const projLabel = el(`<label class="proj-check"><input type="checkbox" /> <span>Project</span></label>`);
+        const projCb = projLabel.querySelector('input');
+        projCb.checked = !!a.isProject;
+        lockIfReadOnly(projCb);
+        projCb.addEventListener('change', ()=>{
+          a.isProject = projCb.checked;
+          if(a.isProject && (a.projectShareUsd===undefined || a.projectShareUsd===null)) a.projectShareUsd = 100;
+          syncShare(a, student);
+          saveCourses(currentStudentId);
+          logActivity(a.isProject ? 'Marked as project' : 'Unmarked as project', `${m.name} — ${a.label}`, currentStudentName());
+          render();
+        });
+        projRow.appendChild(projLabel);
+        if(a.isProject){
+          const sw = el(`<div class="apaid"><span>Jafter's share (USD)</span></div>`);
+          const si = lockIfReadOnly(el(`<input type="number" min="0" step="0.01" />`));
+          si.value = a.projectShareUsd ?? '';
+          si.addEventListener('change', ()=>{
+            a.projectShareUsd = si.value === '' ? 0 : Number(si.value);
+            saveCourses(currentStudentId);
+            logActivity('Updated project share', `${m.name} — ${a.label} → $${a.projectShareUsd}`, currentStudentName());
+            render();
+          });
+          sw.appendChild(si);
+          projRow.appendChild(sw);
+        }
+        row.appendChild(projRow);
 
         if(a.status!=='not_started'){
           const dateRow = el(`<div class="date-row"></div>`);

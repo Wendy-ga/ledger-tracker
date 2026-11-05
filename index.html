@@ -171,6 +171,21 @@
   .stat .num.dual{font-size:17px; line-height:1.35;}
   .page-head{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px;}
   .page-title{font-family:'Fraunces',serif; font-size:22px; font-weight:600; margin:0;}
+  .stmt-row{display:grid; grid-template-columns:96px 1fr auto 120px; gap:12px; align-items:center; padding:10px 0; border-top:1px dashed var(--line);}
+  .stmt-row.clickable{grid-template-columns:1fr auto; cursor:pointer;}
+  .stmt-row.clickable:hover{background:var(--paper-2);}
+  .stmt-row.payout{background:color-mix(in srgb, var(--rust) 5%, transparent);}
+  .stmt-date{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-soft);}
+  .stmt-sub{font-size:11.5px; margin-top:2px; font-family:'IBM Plex Mono',monospace;}
+  .stmt-amt{font-family:'IBM Plex Mono',monospace; text-align:right; white-space:nowrap;}
+  .stmt-status{text-align:right;}
+  .pill.owed{background:transparent; color:var(--rust); border-color:var(--rust);}
+  .stat-link{cursor:pointer;} .stat-link:hover{outline:1px solid var(--moss);}
+  @media (max-width:640px){
+    .stmt-row{grid-template-columns:1fr auto;}
+    .stmt-date{grid-column:1 / -1;}
+    .stmt-status{grid-column:1 / -1; text-align:left;}
+  }
   .nav-btns{display:flex; gap:8px; flex-wrap:wrap;}
   .locked-note{margin-left:36px; font-size:12.5px; color:var(--ink-soft); font-style:italic;}
 
@@ -699,6 +714,59 @@ function buildLedger(){
   return { byCurrency, perStudent, unlockedCount, jafterUsdEquivalent };
 }
 
+/* ===================== JAFTER'S STATEMENT =====================
+   Each paid assignment credits Jafter's share on the date it was paid.
+   Each payout debits his account. Payouts settle the oldest shares first,
+   so every share shows as paid to Jafter, part paid, or still owed. */
+function shareDate(a){ return a.paidAt || a.completedAt || a.shareAt || null; }
+function fmtDate(ts){ return ts ? new Date(ts).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : 'No date'; }
+function jafterStatement(){
+  const out = {};
+  CURRENCY_LIST.forEach(c=> out[c] = { shares:[], payouts:[], rows:[], earned:0, paidOut:0, balance:0, owedByStudent:{}, shareByStudent:{} });
+  students.forEach(s=>{
+    const c = studentCurrency(s);
+    (studentCourses[s.id]||[]).forEach(course=>course.modules.forEach(m=>m.assignments.forEach(a=>{
+      if(!isPaidWithAmount(a)) return;
+      const amt = assignmentShare(a, s);
+      if(!(amt>0)) return;
+      out[c].shares.push({ kind:'share', date:shareDate(a), studentId:s.id, studentName:s.name, course:course.title,
+        module:m.name, label:a.label, isProject:!!a.isProject, paid:Number(a.paid)||0, amount:amt });
+    })));
+  });
+  payouts.forEach(p=>{
+    const c = CURRENCIES[p.currency] ? p.currency : 'GBP';
+    out[c].payouts.push({ kind:'payout', id:p.id, date:p.date, amount:round2(Number(p.amount)||0), note:p.note||'', by:p.byEmail||'', raw:p });
+  });
+  const byDate = (x,y)=> (x.date||0)-(y.date||0);
+  CURRENCY_LIST.forEach(c=>{
+    const o = out[c];
+    o.shares.sort(byDate); o.payouts.sort(byDate);
+    let pool = round2(o.payouts.reduce((t,p)=>t+p.amount,0));
+    o.shares.forEach(sh=>{
+      const settled = round2(Math.min(sh.amount, Math.max(0, pool)));
+      pool = round2(pool - settled);
+      sh.settled = settled;
+      sh.owed = round2(sh.amount - settled);
+      sh.status = sh.owed <= 0 ? 'settled' : (settled > 0 ? 'part' : 'owed');
+      o.owedByStudent[sh.studentId] = round2((o.owedByStudent[sh.studentId]||0) + sh.owed);
+      o.shareByStudent[sh.studentId] = round2((o.shareByStudent[sh.studentId]||0) + sh.amount);
+    });
+    o.earned = round2(o.shares.reduce((t,x)=>t+x.amount,0));
+    o.paidOut = round2(o.payouts.reduce((t,x)=>t+x.amount,0));
+    o.balance = round2(o.earned - o.paidOut);
+    o.credit = round2(Math.max(0, pool));   // paid out ahead of shares earned
+    const rows = [...o.shares, ...o.payouts].sort((x,y)=> byDate(x,y) || (x.kind==='share' ? -1 : 1));
+    let bal = 0;
+    rows.forEach(r=>{ bal = round2(bal + (r.kind==='share' ? r.amount : -r.amount)); r.balance = bal; });
+    o.rows = rows;
+  });
+  return out;
+}
+function studentJafterOwed(student){
+  const st = jafterStatement()[studentCurrency(student)];
+  return { owed: st.owedByStudent[student.id]||0, share: st.shareByStudent[student.id]||0 };
+}
+
 /* ===================== REPORTING HELPERS =====================
    Note: completedAt / paidAt timestamps only exist on assignments marked
    done AFTER this feature was added. Older records marked done before
@@ -815,6 +883,7 @@ function render(){
   else if(view.screen==='reports') app.appendChild(renderReports());
   else if(view.screen==='activity') app.appendChild(renderActivity());
   else if(view.screen==='balance') app.appendChild(renderBalance());
+  else if(view.screen==='jafter') app.appendChild(renderStatement());
 }
 
 function renderLogin(){
@@ -857,21 +926,26 @@ function renderBrand(){
   if(currentUser){
     if(students.length){
       const select = el(`<select id="studentSelect"></select>`);
-      select.appendChild(el(`<option value="">— switch student —</option>`));
+      const homeOpt = el(`<option value="__home">Home — all students</option>`);
+      if(view.screen==='profiles') homeOpt.selected = true;
+      select.appendChild(homeOpt);
+      if(!['profiles','dashboard','course'].includes(view.screen)) select.insertBefore(el(`<option value="" selected disabled>Go to student…</option>`), homeOpt);
       students.forEach(s=>{
         const opt = el(`<option value="${s.id}">${escapeHtml(s.name)}</option>`);
-        if(s.id===currentStudentId) opt.selected = true;
+        if(s.id===currentStudentId && ['dashboard','course'].includes(view.screen)) opt.selected = true;
         select.appendChild(opt);
       });
+      if(!['profiles','dashboard','course'].includes(view.screen)) select.selectedIndex = 0;
       select.addEventListener('change', e=>{
         if(!e.target.value) return;
+        if(e.target.value==='__home'){ view={screen:'profiles',courseIdx:null,addingCourse:false,openModules:{}}; render(); return; }
         currentStudentId = e.target.value;
         view = { screen:'dashboard', courseIdx:null, addingCourse:false, openModules:{} };
         render();
       });
       sw.appendChild(select);
       if(view.screen!=='profiles'){
-        const homeBtn = el(`<button class="ghost">All students</button>`);
+        const homeBtn = el(`<button class="ghost">Home</button>`);
         homeBtn.onclick = ()=>{ view={screen:'profiles',courseIdx:null,addingCourse:false,openModules:{}}; render(); };
         sw.appendChild(homeBtn);
       }
@@ -890,7 +964,7 @@ function renderBrand(){
 function renderProfiles(){
   const wrap = el(`<div></div>`);
   const head = el(`<div class="page-head"><h2 class="page-title">Overview</h2><div class="nav-btns"></div></div>`);
-  [['Balance sheet','balance','moss'],['Reports','reports','ghost'],['Activity','activity','ghost']].forEach(([label,screen,cls])=>{
+  [['Balance sheet','balance','moss'],['Jafter\'s statement','jafter','ghost'],['Reports','reports','ghost'],['Activity','activity','ghost']].forEach(([label,screen,cls])=>{
     const b = el(`<button class="${cls}">${label}</button>`);
     b.onclick = ()=>{ view = { screen, courseIdx:null, addingCourse:false, openModules:{}, reportPeriod:'week' }; render(); };
     head.querySelector('.nav-btns').appendChild(b);
@@ -1020,7 +1094,7 @@ function openEditStudentModal(s){
 
 function renderTrash(){
   const wrap = el(`<div></div>`);
-  const back = el(`<button class="back">← Back to students</button>`);
+  const back = el(`<button class="back">← Home</button>`);
   back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
   wrap.appendChild(back);
 
@@ -1099,7 +1173,7 @@ async function backfillMissingTimestamps(count){
 function renderReports(){
   const period = view.reportPeriod || 'week';
   const wrap = el(`<div></div>`);
-  const back = el(`<button class="back">← Back to students</button>`);
+  const back = el(`<button class="back">← Home</button>`);
   back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
   wrap.appendChild(back);
 
@@ -1224,18 +1298,160 @@ function sheetRow(label, value, opts={}){
   </div>`;
 }
 
+function payoutForm(defaultCur){
+  const f = el(`<div>
+    <div class="row" style="align-items:flex-end;">
+      <div class="field" style="margin:0;"><label>Amount</label><input id="payAmount" type="number" min="0" step="0.01" placeholder="0.00" /></div>
+      <div class="field" style="margin:0;"><label>Currency</label><select id="payCur">${CURRENCY_LIST.map(c=>`<option value="${c}" ${c===defaultCur?'selected':''}>${CURRENCIES[c].symbol} ${c}</option>`).join('')}</select></div>
+      <div class="field" style="margin:0;"><label>Date</label><input id="payDate" type="date" value="${toDateInputValue(Date.now())}" /></div>
+    </div>
+    <div class="field" style="margin:12px 0 0;"><label>Note (optional)</label><input id="payNote" placeholder="e.g. EcoCash, bank transfer, cash" /></div>
+  </div>`);
+  ['#payAmount','#payCur','#payDate','#payNote'].forEach(q=> lockIfReadOnly(f.querySelector(q)));
+  const btn = lockIfReadOnly(el(`<button class="moss" style="margin-top:12px;">Record payout</button>`));
+  btn.onclick = async ()=>{
+    const amount = Number(f.querySelector('#payAmount').value);
+    const currency = f.querySelector('#payCur').value;
+    const dateVal = f.querySelector('#payDate').value;
+    const note = f.querySelector('#payNote').value.trim();
+    if(!(amount > 0)){ toast('Enter an amount above zero'); return; }
+    if(!dateVal){ toast('Pick a date'); return; }
+    await addPayout(round2(amount), currency, fromDateInputValue(dateVal), note);
+  };
+  f.appendChild(btn);
+  return f;
+}
+
+function renderStatement(){
+  const wrap = el(`<div></div>`);
+  const back = el(`<button class="back">← Home</button>`);
+  back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
+  wrap.appendChild(back);
+
+  const ST = jafterStatement();
+  if(!view.stmtCur){ view.stmtCur = (ST.GBP.rows.length || !ST.USD.rows.length) ? 'GBP' : 'USD'; }
+  const c = view.stmtCur;
+  const o = ST[c];
+  const stuId = view.stmtStudent || '';
+  const show = view.stmtShow || 'all';
+  const curStudents = students.filter(s=>studentCurrency(s)===c);
+  const go = (patch)=>{ Object.assign(view, patch); render(); };
+
+  const head = el(`<div class="page-head"><h2 class="page-title">Jafter's statement</h2><div class="nav-btns"></div></div>`);
+  CURRENCY_LIST.forEach(k=>{
+    const b = el(`<button class="${k===c?'moss':'ghost'}">${CURRENCIES[k].symbol} ${k}</button>`);
+    b.onclick = ()=> go({ stmtCur:k, stmtStudent:'' });
+    head.querySelector('.nav-btns').appendChild(b);
+  });
+  wrap.appendChild(head);
+
+  // Summary
+  let tiles;
+  if(stuId){
+    const sh = o.shares.filter(x=>x.studentId===stuId);
+    const earned = round2(sh.reduce((t,x)=>t+x.amount,0));
+    const settled = round2(sh.reduce((t,x)=>t+x.settled,0));
+    const owed = round2(earned - settled);
+    tiles = `<div class="stat"><div class="num">${money(earned,c)}</div><div class="lbl">Share earned</div></div>
+      <div class="stat"><div class="num">${money(settled,c)}</div><div class="lbl">Paid to Jafter</div></div>
+      <div class="stat"><div class="num" style="color:${owed>0?'var(--rust)':'var(--moss-deep)'}">${money(owed,c)}</div><div class="lbl">Still owed</div></div>`;
+  } else {
+    tiles = `<div class="stat"><div class="num">${money(o.earned,c)}</div><div class="lbl">Share earned</div></div>
+      <div class="stat"><div class="num">${money(o.paidOut,c)}</div><div class="lbl">Paid to Jafter</div></div>
+      <div class="stat"><div class="num" style="color:${o.balance>0?'var(--rust)':'var(--moss-deep)'}">${money(o.balance,c)}</div><div class="lbl">${o.balance<0?'Paid in advance':'Balance owed'}</div></div>`;
+  }
+  wrap.appendChild(el(`<div class="card"><div class="stat-row">${tiles}</div></div>`));
+
+  // Owed by student
+  const owedList = curStudents.map(s=>({ s, owed:o.owedByStudent[s.id]||0, share:o.shareByStudent[s.id]||0 })).filter(x=>x.share>0).sort((a,b)=>b.owed-a.owed);
+  if(!stuId && owedList.length){
+    const card = el(`<div class="card"><h2>By student</h2></div>`);
+    owedList.forEach(x=>{
+      const r = el(`<div class="stmt-row clickable">
+        <div class="stmt-main"><strong>${escapeHtml(x.s.name)}</strong><div class="muted stmt-sub">share ${money(x.share,c)} · paid ${money(round2(x.share-x.owed),c)}</div></div>
+        <div class="stmt-amt" style="color:${x.owed>0?'var(--rust)':'var(--moss-deep)'}">${x.owed>0 ? money(x.owed,c)+' owed' : 'Settled'}</div>
+      </div>`);
+      r.onclick = ()=> go({ stmtStudent:x.s.id });
+      card.appendChild(r);
+    });
+    wrap.appendChild(card);
+  }
+
+  // Filters
+  const filt = el(`<div class="card"><div class="row" style="align-items:flex-end;">
+    <div class="field" style="margin:0;"><label>Student</label><select id="fStu"><option value="">All students</option>${curStudents.map(s=>`<option value="${s.id}" ${s.id===stuId?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}</select></div>
+    <div class="field" style="margin:0;"><label>Show</label><select id="fShow">
+      <option value="all" ${show==='all'?'selected':''}>All entries</option>
+      <option value="owed" ${show==='owed'?'selected':''}>Owed to Jafter</option>
+      <option value="settled" ${show==='settled'?'selected':''}>Paid to Jafter</option>
+      ${stuId?'':`<option value="payouts" ${show==='payouts'?'selected':''}>Payouts only</option>`}
+    </select></div>
+  </div></div>`);
+  filt.querySelector('#fStu').onchange = e=> go({ stmtStudent:e.target.value, stmtShow: (show==='payouts' && e.target.value) ? 'all' : show });
+  filt.querySelector('#fShow').onchange = e=> go({ stmtShow:e.target.value });
+
+  // Entries, newest first
+  let rows = o.rows.slice();
+  if(stuId) rows = rows.filter(r=>r.kind==='share' && r.studentId===stuId);
+  if(show==='owed') rows = rows.filter(r=>r.kind==='share' && r.status!=='settled');
+  if(show==='settled') rows = rows.filter(r=>r.kind==='share' && r.status!=='owed');
+  if(show==='payouts') rows = rows.filter(r=>r.kind==='payout');
+  rows.reverse();
+
+  const list = el(`<div style="margin-top:14px;"></div>`);
+  if(!rows.length){
+    list.appendChild(el(`<div class="muted" style="padding:14px 0;">No entries</div>`));
+  }
+  const statusPill = r=> r.status==='settled' ? `<span class="pill done">Paid to Jafter</span>`
+    : r.status==='part' ? `<span class="pill progress">${money(r.owed,c)} owed</span>`
+    : `<span class="pill owed">Owed</span>`;
+  rows.forEach(r=>{
+    let row;
+    if(r.kind==='share'){
+      row = el(`<div class="stmt-row">
+        <div class="stmt-date">${fmtDate(r.date)}</div>
+        <div class="stmt-main">${stuId?'':`<strong>${escapeHtml(r.studentName)}</strong> · `}${escapeHtml(r.module)} — ${escapeHtml(r.label)}${r.isProject?' <span class="pill locked" style="font-size:10px;">Project</span>':''}
+          <div class="muted stmt-sub">student paid ${money(r.paid,c)}</div></div>
+        <div class="stmt-amt">+ ${money(r.amount,c)}${stuId?'':`<div class="muted stmt-sub">bal ${money(r.balance,c)}</div>`}</div>
+        <div class="stmt-status">${statusPill(r)}</div>
+      </div>`);
+    } else {
+      row = el(`<div class="stmt-row payout">
+        <div class="stmt-date">${fmtDate(r.date)}</div>
+        <div class="stmt-main"><strong>Payout to Jafter</strong>${r.note?' · '+escapeHtml(r.note):''}<div class="muted stmt-sub">by ${escapeHtml(r.by||'unknown')}</div></div>
+        <div class="stmt-amt" style="color:var(--rust)">− ${money(r.amount,c)}<div class="muted stmt-sub">bal ${money(r.balance,c)}</div></div>
+        <div class="stmt-status"></div>
+      </div>`);
+      const del = lockIfReadOnly(el(`<button class="subtle" style="font-size:11px;">Delete</button>`));
+      del.onclick = ()=> deletePayout(r.raw);
+      row.querySelector('.stmt-status').appendChild(del);
+    }
+    list.appendChild(row);
+  });
+  filt.appendChild(list);
+  wrap.appendChild(filt);
+
+  // Record a payout
+  const payCard = el(`<div class="card"><h2>Record payout</h2></div>`);
+  payCard.appendChild(payoutForm(c));
+  wrap.appendChild(payCard);
+
+  return wrap;
+}
+
 function renderBalance(){
   const wrap = el(`<div></div>`);
-  const back = el(`<button class="back">← Back to students</button>`);
+  const back = el(`<button class="back">← Home</button>`);
   back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
   wrap.appendChild(back);
 
   const L = buildLedger();
+  const ST = jafterStatement();
   const G = L.byCurrency.GBP, U = L.byCurrency.USD;
 
-  wrap.appendChild(el(`<div class="card">
-    <h2>Balance sheet</h2>
-  </div>`));
+  const bsHead = el(`<div class="page-head"><h2 class="page-title">Balance sheet</h2><div class="nav-btns"><button class="moss">Jafter's statement</button></div></div>`);
+  bsHead.querySelector('button').onclick = ()=>{ view={screen:'jafter',courseIdx:null,addingCourse:false,openModules:{},stmtShow:'all'}; render(); };
+  wrap.appendChild(bsHead);
 
   // Exchange rate
   const rateCard = el(`<div class="card" ${rateIsSet ? '' : 'style="border-left:4px solid var(--rust);"'}>
@@ -1291,26 +1507,8 @@ function renderBalance(){
   });
 
   // Payouts
-  const payCard = el(`<div class="card">
-    <h2>Payouts to Jafter</h2>
-    <div class="row" style="align-items:flex-end;">
-      <div class="field" style="margin:0;"><label>Amount</label><input id="payAmount" type="number" min="0" step="0.01" placeholder="0.00" /></div>
-      <div class="field" style="margin:0;"><label>Currency</label><select id="payCur">${CURRENCY_LIST.map(c=>`<option value="${c}">${CURRENCIES[c].symbol} ${c}</option>`).join('')}</select></div>
-      <div class="field" style="margin:0;"><label>Date</label><input id="payDate" type="date" value="${toDateInputValue(Date.now())}" /></div>
-    </div>
-    <div class="field" style="margin:12px 0 0;"><label>Note (optional)</label><input id="payNote" placeholder="e.g. EcoCash, bank transfer, cash" /></div>
-  </div>`);
-  const addPayBtn = lockIfReadOnly(el(`<button class="moss" style="margin-top:12px;">Record payout</button>`));
-  addPayBtn.onclick = async ()=>{
-    const amount = Number(payCard.querySelector('#payAmount').value);
-    const currency = payCard.querySelector('#payCur').value;
-    const dateVal = payCard.querySelector('#payDate').value;
-    const note = payCard.querySelector('#payNote').value.trim();
-    if(!(amount > 0)){ toast('Enter an amount above zero'); return; }
-    if(!dateVal){ toast('Pick a date'); return; }
-    await addPayout(round2(amount), currency, fromDateInputValue(dateVal), note);
-  };
-  payCard.appendChild(addPayBtn);
+  const payCard = el(`<div class="card"><h2>Payouts to Jafter</h2></div>`);
+  payCard.appendChild(payoutForm('GBP'));
   if(payouts.length===0){
     payCard.appendChild(el(`<div class="muted" style="margin-top:14px;">No payouts</div>`));
   } else {
@@ -1338,7 +1536,7 @@ function renderBalance(){
       stuCard.appendChild(el(`<div style="padding:10px 0; border-top:1px dashed var(--line);">
         <div style="display:flex; justify-content:space-between;"><strong>${escapeHtml(r.name)}</strong><span class="pill locked">${r.currency}</span></div>
         <div class="muted" style="font-family:'IBM Plex Mono',monospace; font-size:12px; margin-top:4px;">
-          collected ${money(r.paid,r.currency)} · Jafter ${money(r.jafterShare,r.currency)} · Wendy ${money(r.yourShare,r.currency)}${r.outstanding>0 ? ` · <span style="color:var(--rust)">owes ${money(r.outstanding,r.currency)}</span>` : ''}
+          collected ${money(r.paid,r.currency)} · Jafter ${money(r.jafterShare,r.currency)}${(ST[r.currency].owedByStudent[r.id]||0)>0 ? ` (<span style="color:var(--rust)">${money(ST[r.currency].owedByStudent[r.id],r.currency)} owed</span>)` : ''} · Wendy ${money(r.yourShare,r.currency)}${r.outstanding>0 ? ` · <span style="color:var(--rust)">owes ${money(r.outstanding,r.currency)}</span>` : ''}
         </div>
       </div>`));
     });
@@ -1350,7 +1548,7 @@ function renderBalance(){
 
 function renderActivity(){
   const wrap = el(`<div></div>`);
-  const back = el(`<button class="back">← Back to students</button>`);
+  const back = el(`<button class="back">← Home</button>`);
   back.onclick = ()=>{ view={screen:'profiles', courseIdx:null, addingCourse:false, openModules:{}}; render(); };
   wrap.appendChild(back);
 
@@ -1454,6 +1652,7 @@ function renderDashboard(){
   const doneAssignments = courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.filter(isAssignmentDone).length,0),0);
   const jafterShareTotal = round2(courses.reduce((s,c)=>s+c.modules.reduce((x,m)=>x+m.assignments.reduce((y,a)=>y+assignmentShare(a,student),0),0),0));
 
+  const jOwed = studentJafterOwed(student);
   const headerCard = el(`<div class="card">
     <div class="course-head">
       <div class="titles">
@@ -1466,9 +1665,10 @@ function renderDashboard(){
       <div class="stat"><div class="num">${doneAssignments}/${totalAssignments}</div><div class="lbl">Done</div></div>
       <div class="stat"><div class="num">${money(totalPaid, cur)}</div><div class="lbl">Total paid</div></div>
       <div class="stat"><div class="num" style="color:var(--rust)">${money(totalOutstanding, cur)}</div><div class="lbl">Outstanding</div></div>
-      <div class="stat"><div class="num" style="color:var(--moss-deep)">${money(jafterShareTotal, cur)}</div><div class="lbl">Jafter's share</div></div>
+      <div class="stat stat-link" id="jafterTile" title="Open Jafter's statement for ${escapeHtml(student.name)}"><div class="num" style="color:${jOwed.owed>0?'var(--rust)':'var(--moss-deep)'}">${money(jOwed.owed, cur)}</div><div class="lbl">Owed to Jafter</div><div class="muted" style="font-size:11px; margin-top:2px;">of ${money(jafterShareTotal, cur)} share</div></div>
     </div>
   </div>`);
+  headerCard.querySelector('#jafterTile').onclick = ()=>{ view={screen:'jafter',courseIdx:null,addingCourse:false,openModules:{},stmtCur:cur,stmtStudent:student.id,stmtShow:'all'}; render(); };
   const headerActions = el(`<div class="row" style="margin-top:12px;"></div>`);
   const editBtn = lockIfReadOnly(el(`<button class="ghost" style="font-size:12px;">Edit details</button>`));
   editBtn.onclick = ()=> openEditStudentModal(student);

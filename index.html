@@ -123,6 +123,10 @@
   .module{border-top:1px dashed var(--line); padding:16px 0;}
   .module:first-of-type{border-top:1px solid var(--line); margin-top:16px;}
   .module-head{display:flex; align-items:center; justify-content:space-between; gap:10px; cursor:pointer;}
+  .mhead-right{display:flex; align-items:center; gap:10px;}
+  .mod-remove{background:none; border:none; padding:4px 2px; font-size:12px; color:var(--rust); cursor:pointer; opacity:.75;}
+  .mod-remove:hover{opacity:1; text-decoration:underline;}
+  .mod-remove:disabled{display:none;}
   .module-head .mtitle{display:flex; align-items:center; gap:10px;}
   .midx{
     width:26px;height:26px;border-radius:50%; border:1.5px solid var(--moss); color:var(--moss-deep);
@@ -1564,8 +1568,26 @@ function renderCourse(){
           <div class="mcode">${escapeHtml(m.code)} · ${m.assignments.length} assignment${m.assignments.length===1?'':'s'}</div>
         </div>
       </div>
-      <span class="pill ${status}">${statusLabel}</span>
+      <div class="mhead-right">
+        <span class="pill ${status}">${statusLabel}</span>
+        <button type="button" class="mod-remove" title="Remove module">Remove</button>
+      </div>
     </div>`);
+    const rmM = lockIfReadOnly(head2.querySelector('.mod-remove'));
+    rmM.addEventListener('click', (e)=>{
+      e.stopPropagation();   // don't open/close the module
+      const hasRecords = m.assignments.some(a=>a.status && a.status!=='not_started');
+      const msg = hasRecords
+        ? 'Remove "'+m.name+'"? It has completed or paid assignments, and those records will be deleted. This cannot be undone.'
+        : 'Remove "'+m.name+'" from this course?';
+      if(!confirm(msg)) return;
+      const i = course.modules.indexOf(m);
+      if(i>-1) course.modules.splice(i,1);
+      saveCourses(currentStudentId);
+      logActivity('Removed module', course.title+' — '+m.name, currentStudentName());
+      toast('Module removed');
+      render();
+    });
     if(!locked){
       head2.style.cursor='pointer';
       head2.addEventListener('click', ()=>{
@@ -1725,20 +1747,6 @@ function renderCourse(){
         };
         actions.appendChild(rmA);
       }
-      const rmM = lockIfReadOnly(el(`<button class="subtle" style="font-size:12px;color:var(--rust);">Remove module</button>`));
-      rmM.onclick = ()=>{
-        const hasRecords = m.assignments.some(a=>a.status && a.status!=='not_started');
-        const msg = hasRecords
-          ? 'Remove "'+m.name+'"? It has completed or paid assignments, and those records will be deleted. This cannot be undone.'
-          : 'Remove "'+m.name+'" from this course?';
-        if(!confirm(msg)) return;
-        const i = course.modules.indexOf(m);
-        if(i>-1) course.modules.splice(i,1);
-        saveCourses(currentStudentId);
-        logActivity('Removed module', course.title+' — '+m.name, currentStudentName());
-        render();
-      };
-      actions.appendChild(rmM);
       modEl.appendChild(actions);
     }
     modCard.appendChild(modEl);

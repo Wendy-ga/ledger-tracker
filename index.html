@@ -1725,6 +1725,20 @@ function renderCourse(){
         };
         actions.appendChild(rmA);
       }
+      const rmM = lockIfReadOnly(el(`<button class="subtle" style="font-size:12px;color:var(--rust);">Remove module</button>`));
+      rmM.onclick = ()=>{
+        const hasRecords = m.assignments.some(a=>a.status && a.status!=='not_started');
+        const msg = hasRecords
+          ? 'Remove "'+m.name+'"? It has completed or paid assignments, and those records will be deleted. This cannot be undone.'
+          : 'Remove "'+m.name+'" from this course?';
+        if(!confirm(msg)) return;
+        const i = course.modules.indexOf(m);
+        if(i>-1) course.modules.splice(i,1);
+        saveCourses(currentStudentId);
+        logActivity('Removed module', course.title+' — '+m.name, currentStudentName());
+        render();
+      };
+      actions.appendChild(rmM);
       modEl.appendChild(actions);
     }
     modCard.appendChild(modEl);
